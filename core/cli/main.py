@@ -44,7 +44,11 @@ def cmd_new_study(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    columns = load_file(args.study_id, args.file)
+    na_vals = None
+    if getattr(args, "na_values", None):
+        na_vals = [v.strip() for v in args.na_values.split(",")]
+        print(f"Treating values as missing: {na_vals}")
+    columns = load_file(args.study_id, args.file, na_values=na_vals)
     print(f"Ingested {len(columns)} columns: {', '.join(columns)}")
 
 
@@ -260,6 +264,25 @@ def cmd_lock(args: argparse.Namespace) -> None:
         print("No provisional plan found. Run 'research-tool plan' first.",
               file=sys.stderr)
         sys.exit(1)
+
+    # ── Block locking on duplicate patient IDs unless explicitly allowed ──
+    if not getattr(args, "allow_duplicate_ids", False):
+        from core.ingestion.csv_loader import find_duplicate_patient_ids
+        dupes = find_duplicate_patient_ids(args.study_id)
+        if dupes:
+            dupe_desc = ", ".join("'" + str(pid) + "' (" + str(n) + "x)" for pid, n in dupes)
+            print(
+                f"Error: duplicate patient identifiers found — {dupe_desc}. "
+                f"The study cannot be locked because duplicate IDs violate the "
+                f"independence assumption of all planned tests. "
+                f"Either:\n"
+                f"  (a) remove or deduplicate the offending rows and re-ingest, or\n"
+                f"  (b) pass --allow-duplicate-ids to lock if this is a "
+                f"genuinely longitudinal/repeated-measures design.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     import json
     plan_data = json.loads(prov_path.read_text())
     plan = StudyPlan.from_dict(plan_data)
@@ -609,6 +632,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("ingest", help="Load CSV/Excel into a study")
     sp.add_argument("study_id")
     sp.add_argument("file")
+    sp.add_argument("--na-values",
+                    help="Comma-separated strings to treat as missing (e.g. 'unknown,missing,N/A,?'). "
+                         "Added on top of pandas' default NA representations.")
     sp.set_defaults(func=cmd_ingest)
 
     # classify-variables
@@ -639,6 +665,10 @@ def build_parser() -> argparse.ArgumentParser:
     # lock
     sp = sub.add_parser("lock", help="Lock the study plan (immutable snapshot)")
     sp.add_argument("study_id")
+    sp.add_argument("--allow-duplicate-ids", action="store_true",
+                    help="Allow locking even when duplicate patient IDs are present "
+                         "(use for longitudinal/repeated-measures designs where "
+                         "the same patient legitimately appears in multiple rows)")
     sp.set_defaults(func=cmd_lock)
 
     # unmask
