@@ -58,3 +58,67 @@ def test_prior_lines_continuous():
     result = classify_variables_interactive("test", ["prior_lines"])
     assert result[0]["role"] == "baseline"
     assert result[0]["data_type"] == "continuous"
+
+
+def test_float_column_continuous():
+    """Float column with many distinct values → continuous regardless of name."""
+    import shutil, tempfile, csv
+    from core.database import get_connection, init_db, DATA_ROOT
+    from core.ingestion.variable_classifier import classify_variables_interactive
+
+    sid = "test_float_col"
+    p = DATA_ROOT / sid
+    if p.exists():
+        shutil.rmtree(p)
+
+    conn = get_connection(sid)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id, name, created_at, data_dir) VALUES (?, ?, ?, ?)",
+                 (sid, "FloatCol", "2025-01-01", str(p)))
+    raw = f"raw_{sid}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, followup_m_protein TEXT)")
+    for i in range(20):
+        conn.execute(f"INSERT INTO {raw} (followup_m_protein) VALUES (?)", (str(i * 0.5 + 0.1),))
+    conn.commit()
+    conn.close()
+
+    result = classify_variables_interactive(sid, ["followup_m_protein"])
+    # "followup" is in the outcome keyword set, so role should be outcome
+    assert result[0]["role"] == "outcome"
+    assert result[0]["data_type"] == "continuous"
+
+    shutil.rmtree(p)
+
+
+def test_low_cardinality_categorical():
+    """Column with 3 distinct string values → categorical."""
+    import shutil
+    from core.database import get_connection, init_db, DATA_ROOT
+
+    sid = "test_low_card"
+    p = DATA_ROOT / sid
+    if p.exists():
+        shutil.rmtree(p)
+
+    conn = get_connection(sid)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id, name, created_at, data_dir) VALUES (?, ?, ?, ?)",
+                 (sid, "LowCard", "2025-01-01", str(p)))
+    raw = f"raw_{sid}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, grade TEXT)")
+    for i in range(20):
+        conn.execute(f"INSERT INTO {raw} (grade) VALUES (?)",
+                     (["mild", "moderate", "severe"][i % 3],))
+    conn.commit()
+    conn.close()
+
+    result = classify_variables_interactive(sid, ["grade"])
+    assert result[0]["data_type"] == "categorical"
+
+    shutil.rmtree(p)
+
+
+def test_unknown_name_flagged_unclassified():
+    """Column with unrecognized column name → unclassified."""
+    result = classify_variables_interactive("test", ["xyz_something_random"])
+    assert result[0]["role"] == "unclassified"

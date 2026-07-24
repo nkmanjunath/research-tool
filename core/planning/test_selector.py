@@ -231,6 +231,74 @@ class ChiSquareAssumptionCheck(AssumptionCheck):
 #        no outcome values should be cross-tabulated with treatment groups.
 #        Relevant test_names: "t_test", "paired_t_test"
 
+
+@_register
+class TTestAssumptionCheck(AssumptionCheck):
+    """Check normality of pooled outcome distribution for t-test plans.
+
+    Reads the marginal (ungrouped) outcome values from the shadow table and
+    runs Shapiro-Wilk.  Warns if n < 30 *and* the normality test suggests
+    non-normality (p < 0.05).  For n >= 30 the Central Limit Theorem provides
+    robustness — no warning regardless of the Shapiro-Wilk result.
+
+    IMPORTANT: this checks the *pooled* distribution only, never per-group.
+    Per-group normality is not checked pre-lock because it would reveal
+    structure about the association between the grouping variable and the
+    outcome, the same class of problem as the chi-square cross-tab leak.
+    """
+
+    def applies_to(self, test_name: str) -> bool:
+        return test_name in ("t_test", "paired_t_test")
+
+    def check(
+        self, study_id: str, test: dict, group_col: str, conn, var_info: dict
+    ) -> list[str]:
+        var_name = test.get("variable_name", "")
+        if not var_name:
+            return []
+        if var_info.get(var_name) != "continuous":
+            return []
+
+        shadow_table = f"raw_masked_{study_id}"
+
+        # Read marginal (pooled, ungrouped) outcome values from shadow table.
+        # No GROUP BY, no reference to group_col — just the raw column values.
+        try:
+            cur = conn.execute(
+                f'SELECT CAST("{var_name}" AS REAL) AS val '
+                f'FROM {shadow_table} '
+                f'WHERE "{var_name}" IS NOT NULL'
+            )
+            vals = [r["val"] for r in cur.fetchall() if r["val"] is not None]
+        except Exception:
+            return [
+                f"Could not read outcome data for '{var_name}' from shadow table."
+            ]
+
+        if not vals:
+            return []
+
+        n = len(vals)
+        # CLT robustness for n >= 30 — skip test, no warning
+        if n >= 30:
+            return []
+
+        from scipy.stats import shapiro as shapiro_test
+        try:
+            _, p = shapiro_test(vals)
+        except Exception:
+            return []
+
+        if p < 0.05:
+            return [
+                f"t_test on '{var_name}': pooled distribution may be non-normal "
+                f"(Shapiro-Wilk p={p:.4f}, n={n}). "
+                f"Consider mann_whitney instead."
+            ]
+
+        return []
+
+
 @_register
 class CoxPHAssumptionCheck(AssumptionCheck):
     """Screen Cox plans using only marginal event information available pre-lock."""
