@@ -68,7 +68,10 @@ def lock_plan(study_id: str, plan: StudyPlan) -> Path:
     # Update the study record in DB
     conn = get_connection(study_id)
     init_db(conn)
-    conn.execute("UPDATE studies SET is_locked=1 WHERE id=?", (study_id,))
+    conn.execute(
+        "UPDATE studies SET is_locked=1, study_type=? WHERE id=?",
+        (plan.study_type, study_id),
+    )
     conn.commit()
     conn.close()
 

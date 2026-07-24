@@ -110,6 +110,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
                 "rationale": rationale,
             })
     covariates = [int(x) for x in args.covariates.split(",")] if args.covariates else []
+    matching_criteria = [int(x) for x in args.matching_criteria.split(",")] if getattr(args, "matching_criteria", None) else []
 
     # Role overrides are plan metadata. They do not modify the ingested rows
     # or erase the classifier's original suggestion.
@@ -220,6 +221,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         primary_outcome_variable_ids=outcome_ids,
         planned_tests=tests,
         covariates=covariates,
+        matching_criteria=matching_criteria,
         warnings=warning_map,
         role_overrides=overrides,
         audit={"role_overrides": override_audit},
@@ -613,6 +615,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--outcome-var-ids", required=True, help="Comma-separated variable IDs of primary outcomes")
     sp.add_argument("--test", action="append", dest="tests", help="Planned test in format 'var_id:test_name:rationale'")
     sp.add_argument("--covariates", help="Comma-separated variable IDs for covariates")
+    sp.add_argument("--matching-criteria", help="Comma-separated variable IDs used for matching (case-control studies)")
     sp.add_argument("--override", action="append", dest="overrides", default=[],
                     help="Override a classified role before lock: id=<variable_id>:role=<role>")
     sp.set_defaults(func=cmd_plan)
