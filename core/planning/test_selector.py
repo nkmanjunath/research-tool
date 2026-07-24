@@ -301,7 +301,16 @@ class TTestAssumptionCheck(AssumptionCheck):
 
 @_register
 class CoxPHAssumptionCheck(AssumptionCheck):
-    """Screen Cox plans using only marginal event information available pre-lock."""
+    """Screen Cox plans using only marginal event information available pre-lock.
+
+    Computes events-per-variable (EPV) from the pooled event count and declared
+    covariates.  Warns when EPV < 10 (common rule of thumb).
+
+    NOTE: The true proportional-hazards assumption (Schoenfeld residuals) cannot
+    be checked pre-lock — it requires the fitted Cox model, which needs unmasked,
+    grouped outcome data.  This EPV check is a feasibility proxy only.  The real
+    PH check runs post-unmask inside ``_cox_ph()``.
+    """
 
     def applies_to(self, test_name: str) -> bool:
         return test_name == "cox_proportional_hazards"
@@ -313,36 +322,42 @@ class CoxPHAssumptionCheck(AssumptionCheck):
         prefix = var_name.replace("_days", "").replace("_months", "").replace("_time", "")
         event_col = f"{prefix}_event"
         shadow_table = f"raw_masked_{study_id}"
-        raw_table = f"raw_{study_id}"
+
+        # Number of covariates declared in the plan (passed through from cmd_plan)
+        n_covariates = max(int(test.get("n_covariates", 0)), 0)
+        # +1 for the primary group variable (treatment_arm)
+        total_predictors = n_covariates + 1
+
         try:
             row = conn.execute(
-                f'SELECT COUNT("{event_col}") AS n_observed, '
-                f'SUM(CASE WHEN CAST("{event_col}" AS INTEGER) = 1 THEN 1 ELSE 0 END) AS n_events '
-                f'FROM {shadow_table}'
-            ).fetchone()
-            group_row = conn.execute(
-                f'SELECT COUNT(*) AS n_total, COUNT(DISTINCT "{group_col}") AS n_groups '
-                f'FROM {raw_table} WHERE "{group_col}" IS NOT NULL'
+                f'SELECT COUNT("{event_col}") AS n_events '
+                f'FROM {shadow_table} '
+                f'WHERE CAST("{event_col}" AS INTEGER) = 1'
             ).fetchone()
         except Exception:
             return [
-                f"cox_proportional_hazards on '{var_name}': could not inspect marginal event counts before unmasking; "
-                "verify proportional hazards after unmasking."
+                f"cox_proportional_hazards on '{var_name}': "
+                "could not count events from shadow table."
             ]
 
-        n_observed = int(row["n_observed"] or 0)
         n_events = int(row["n_events"] or 0)
-        n_total = int(group_row["n_total"] or 0)
-        n_groups = int(group_row["n_groups"] or 0)
-        if not n_observed or not n_total:
-            return []
-        event_rate = n_events / n_observed
-        if n_events < 10 or event_rate < 0.10 or event_rate > 0.90 or n_groups < 2:
+        if n_events == 0:
             return [
-                f"cox_proportional_hazards on '{var_name}': marginal screening found {n_events} events among "
-                f"{n_observed} observed follow-up records ({event_rate:.1%} event rate); proportional hazards "
-                "should be verified after unmasking before interpreting the model."
+                f"cox_proportional_hazards on '{var_name}': "
+                "zero events recorded in pooled data — Cox model cannot converge."
             ]
+
+        epv = n_events / total_predictors if total_predictors > 0 else n_events
+        if epv < 10:
+            return [
+                f"cox_proportional_hazards on '{var_name}': "
+                f"{n_events} events across {total_predictors} predictor(s) "
+                f"(EPV={epv:.1f}). "
+                f"Cox models are unreliable below 10 events per predictor. "
+                f"Consider reducing the number of covariates or using a "
+                f"simpler analysis."
+            ]
+
         return []
 
 # FIXME: Add ANOVA variance-homogeneity check here.
