@@ -454,6 +454,31 @@ def cmd_draft(args: argparse.Namespace) -> None:
     print(f"Manuscript draft written to {path}")
 
 
+def cmd_bundle(args: argparse.Namespace) -> None:
+    """Create a hash-verified portable study archive."""
+    from core.reporting.bundle import create_bundle, format_verification_report
+    try:
+        result = create_bundle(args.study_id)
+        print(f"Bundle created: {result['bundle_path']}")
+        print(f"Composite hash: {result['composite_hash']}")
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_verify_bundle(args: argparse.Namespace) -> None:
+    """Verify a bundle archive's integrity."""
+    from core.reporting.bundle import verify_bundle, format_verification_report
+    try:
+        result = verify_bundle(args.bundle_path)
+        print(format_verification_report(result))
+        if not result["valid"]:
+            sys.exit(1)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_export(args: argparse.Namespace) -> None:
     """Export study as study_result.v1.json (portable, reviewer-ready)."""
     import json
@@ -700,6 +725,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("draft", help="Generate manuscript draft")
     sp.add_argument("study_id")
     sp.set_defaults(func=cmd_draft)
+
+    # bundle
+    sp = sub.add_parser("bundle", help="Create a hash-verified portable study archive")
+    sp.add_argument("study_id")
+    sp.set_defaults(func=cmd_bundle)
+
+    # verify-bundle
+    sp = sub.add_parser("verify-bundle", help="Verify a bundle archive's integrity")
+    sp.add_argument("bundle_path", help="Path to the .tar.gz bundle file")
+    sp.set_defaults(func=cmd_verify_bundle)
 
     # export
     sp = sub.add_parser("export", help="Export study as JSON (portable reviewer format)")
