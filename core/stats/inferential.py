@@ -268,6 +268,24 @@ def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
     ci = cph.confidence_intervals_.loc[group_col] if group_col in cph.confidence_intervals_.index else None
     p = cph.summary.loc[group_col, "p"] if group_col in cph.summary.index else None
 
+    # Post-fit proportional-hazards diagnostic (Schoenfeld residuals)
+    diagnostics = None
+    try:
+        from lifelines.statistics import proportional_hazard_test
+        results = proportional_hazard_test(cph, df, time_transform="km")
+        # Build per-covariate summary
+        diag_rows = []
+        for cov_name in results.summary.index:
+            row = results.summary.loc[cov_name]
+            diag_rows.append({
+                "covariate": str(cov_name),
+                "test_statistic": float(row.get("test_statistic", 0)),
+                "p_value": float(row.get("p", 1.0)),
+            })
+        diagnostics = {"test": "Schoenfeld residuals", "covariates": diag_rows}
+    except Exception:
+        diagnostics = {"test": "Schoenfeld residuals", "error": "Could not compute"}
+
     return _uro(
         test_name="cox_proportional_hazards",
         statistic=float(hr) if hr is not None else None,
@@ -279,5 +297,5 @@ def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
             "metric": "Hazard Ratio",
             "value": float(hr),
         } if hr is not None else None,
-        params={"covariates": covariates},
+        params={"covariates": covariates, "assumption_diagnostics": diagnostics},
     )

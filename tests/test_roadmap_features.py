@@ -105,9 +105,11 @@ def test_cox_assumption_check_warns_on_marginal_event_rate_difference():
 
     warnings = check_assumptions(
         STUDY_ID,
-        [{"variable_name": "pfs_days", "test_name": "cox_proportional_hazards"}],
+        [{"variable_name": "pfs_days", "test_name": "cox_proportional_hazards",
+          "n_covariates": 3}],
     )
-    assert any("proportional hazards" in warning.lower() for warning in warnings)
+    # 4 rows in test data, 2 events → EPV = 2/4 = 0.5 → warn
+    assert any("EPV" in warning for warning in warnings)
     assert all("A" not in warning.split(":")[-1] for warning in warnings)
 
 

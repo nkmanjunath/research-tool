@@ -196,6 +196,11 @@ def cmd_plan(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Check assumptions before building plan
+    # Enrich tests with covariate count for Cox EPV check
+    n_covariates = len(covariates)
+    for t in tests:
+        t["n_covariates"] = n_covariates
+
     warnings = check_assumptions(args.study_id, tests)
     for w in warnings:
         print(w, file=sys.stderr)
