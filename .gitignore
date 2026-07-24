@@ -1,0 +1,25 @@
+# Study data (real or synthetic)
+data/
+*.db
+*.sqlite
+
+# Verify script artifacts
+_test_emd.csv
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
