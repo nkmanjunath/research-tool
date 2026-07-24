@@ -205,6 +205,22 @@ def cmd_plan(args: argparse.Namespace) -> None:
     warnings = check_assumptions(args.study_id, tests)
     for w in warnings:
         print(w, file=sys.stderr)
+
+    # Warn if a matching criterion overlaps the comparison variable
+    if matching_criteria:
+        comp_lower = args.comparison.lower().replace("_", " ")
+        for vid, info in classified.items():
+            col_name = info["name"]
+            col_normalized = col_name.lower().replace("_", " ")
+            if col_normalized in comp_lower and vid in matching_criteria:
+                print(
+                    f"Warning: variable '{col_name}' is declared as both a "
+                    f"matching criterion and part of the primary comparison. "
+                    f"Matching on the comparison variable can obscure the effect "
+                    f"being studied — confirm this is intentional.",
+                    file=sys.stderr,
+                )
+
     # Map warnings to test names for enforcement at analyze time
     warning_map: dict[str, str] = {}
     for test in tests:

@@ -1,6 +1,7 @@
 """Tests for inferential statistics."""
 
 import pandas as pd
+import pytest
 
 from core.stats.inferential import run_test
 
@@ -88,3 +89,39 @@ def test_unknown_test():
     df = _make_df()
     result = run_test("imaginary_test", df, "outcome", "group")
     assert "error" in str(result.get("params", {}))
+
+
+def test_kaplan_meier_rejects_missing_event_col():
+    """Survival test on a duration-only column must raise a clear ValueError."""
+    df = pd.DataFrame({
+        "pfs_days": [100, 200, 150],
+        "treatment_arm": ["A", "B", "A"],
+    })
+    with pytest.raises(ValueError, match="no linked event/censoring column"):
+        run_test("kaplan_meier_logrank", df, outcome_col="pfs_days",
+                 group_col="treatment_arm", time_col="pfs_days",
+                 event_col="pfs_event")
+
+
+def test_kaplan_meier_rejects_none_event_col():
+    """Survival test with event_col=None must raise a clear ValueError."""
+    df = pd.DataFrame({
+        "pfs_days": [100, 200, 150],
+        "treatment_arm": ["A", "B", "A"],
+    })
+    with pytest.raises(ValueError, match="no linked event/censoring column"):
+        run_test("kaplan_meier_logrank", df, outcome_col="pfs_days",
+                 group_col="treatment_arm", time_col="pfs_days",
+                 event_col=None)
+
+
+def test_cox_ph_rejects_missing_event_col():
+    """Cox PH on a duration-only column must raise a clear ValueError."""
+    df = pd.DataFrame({
+        "pfs_days": [100, 200, 150],
+        "treatment_arm": ["A", "B", "A"],
+    })
+    with pytest.raises(ValueError, match="no linked event/censoring column"):
+        run_test("cox_proportional_hazards", df, outcome_col="pfs_days",
+                 group_col="treatment_arm", time_col="pfs_days",
+                 event_col="pfs_event", covariates=[])

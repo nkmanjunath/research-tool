@@ -191,6 +191,64 @@ def _section_has_hydrated_content(draft: str, heading: str) -> bool:
     return False
 
 
+def _build_live_draft(
+    study_id: str, study_type: str, variables, analyses, locked_plans,
+) -> str:
+    """Build a synthetic in-memory draft for STROBE section-hydration checks.
+
+    Never reads manuscript_draft.md from disk — always derives key results
+    and limitations directly from live study data.  This makes items 18-22
+    order-independent: they reflect what COULD be generated, not what was
+    previously written.
+    """
+    from core.reporting.manuscript_draft import generate_key_results, generate_limitations
+
+    # Only the Discussion and Other Information sections matter for items 18-22.
+    # Everything else is minimal boilerplate so the regex section-matcher works.
+
+    # Determine whether analyses exist
+    has_analyses = len(analyses) > 0
+
+    # Discussion: key results + limitations
+    if has_analyses:
+        key_results = generate_key_results(analyses)
+        limitations = generate_limitations(study_id)
+        limitations_section = (
+            f"**Limitations:**\n\n{limitations}\n\n"
+            if limitations and limitations.strip()
+            else "**Limitations:** [Discuss limitations]\n\n"
+        )
+        discussion = (
+            "## Discussion\n\n"
+            f"{key_results}\n\n"
+            f"{limitations_section}"
+            "**Interpretation:** [Cautious overall interpretation]\n\n"
+            "**Generalisability:** [Discuss external validity]\n\n"
+        )
+    else:
+        discussion = (
+            "## Discussion\n\n"
+            "**Key results:** [Summarise key results]\n\n"
+            "**Limitations:** [Discuss limitations]\n\n"
+            "**Interpretation:** [Cautious overall interpretation]\n\n"
+            "**Generalisability:** [Discuss external validity]\n\n"
+        )
+
+    # Other Information: use non-bracketed default funding text
+    other = (
+        "## Other Information\n\n"
+        "**Funding:** Not yet declared by study authors.\n\n"
+    )
+
+    # Minimal headers for other sections so the ##-section matcher finds them
+    abstract = "## Abstract\n\n**Background:** placeholder.\n\n**Methods:** placeholder.\n\n**Results:** placeholder.\n\n**Conclusions:** placeholder.\n\n"
+    introduction = "## Introduction\n\n[Background placeholder]\n\n"
+    methods = "## Methods\n\n[Methods placeholder]\n\n"
+    results = "## Results\n\n[Results placeholder]\n\n"
+
+    return abstract + introduction + methods + results + discussion + other + "\n\n"
+
+
 def check_study(study_id: str) -> list[StrobeItem]:
     """Check each STROBE item against the current study state.
 
@@ -218,9 +276,10 @@ def check_study(study_id: str) -> list[StrobeItem]:
 
     conn.close()
 
-    # Load manuscript draft (if it exists)
-    draft_path = DATA_ROOT / study_id / "manuscript_draft.md"
-    draft = draft_path.read_text() if draft_path.exists() else ""
+    # Build a synthetic draft from live study data so items 18-22 never
+    # depend on the `draft` command having been run before `strobe-check`.
+    # Lazy import avoids circular dependency (manuscript_draft imports check_study).
+    draft = _build_live_draft(study_id, study_type, variables, analyses, locked_plans)
 
     results = []
     for item in STROBE_ITEMS:

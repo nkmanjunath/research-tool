@@ -219,6 +219,14 @@ def _kaplan_meier_logrank(data: pd.DataFrame, time_col: str, event_col: str,
     from lifelines import KaplanMeierFitter
     from lifelines.statistics import logrank_test
 
+    if not event_col or event_col not in data.columns:
+        raise ValueError(
+            f"Cannot run kaplan_meier_logrank on '{time_col}': "
+            f"no linked event/censoring column found. "
+            f"A time-to-event variable requires both a duration column "
+            f"and an event indicator column."
+        )
+
     data = data.copy()
     data[time_col] = pd.to_numeric(data[time_col], errors="coerce")
     data[event_col] = pd.to_numeric(data[event_col], errors="coerce")
@@ -250,6 +258,14 @@ def _kaplan_meier_logrank(data: pd.DataFrame, time_col: str, event_col: str,
 def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
             group_col: str, covariates: list[str]) -> dict:
     from lifelines import CoxPHFitter
+
+    if not event_col or event_col not in data.columns:
+        raise ValueError(
+            f"Cannot run cox_proportional_hazards on '{time_col}': "
+            f"no linked event/censoring column found. "
+            f"A time-to-event variable requires both a duration column "
+            f"and an event indicator column."
+        )
 
     df = data[[time_col, event_col, group_col] + covariates].copy()
     for c in df.columns:

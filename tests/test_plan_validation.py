@@ -31,16 +31,20 @@ def _setup():
         shutil.rmtree(p)
 
 
-def _plan_args(outcome_var_ids="1", test=("age:t_test:",), covariates="", study_type="cohort"):
+def _plan_args(outcome_var_ids="1", test=("age:t_test:",), covariates="",
+               study_type="cohort", matching_criteria="", comparison="Test comparison"):
     """Helper to build an argparse Namespace as cmd_plan expects."""
-    return argparse.Namespace(
+    ns = argparse.Namespace(
         study_id=STUDY_ID,
         outcome_var_ids=outcome_var_ids,
         tests=test,
         covariates=covariates,
         study_type=study_type,
-        comparison="Test comparison",
+        comparison=comparison,
     )
+    if matching_criteria:
+        ns.matching_criteria = matching_criteria
+    return ns
 
 
 def test_plan_rejects_no_variables():
@@ -129,3 +133,63 @@ def test_plan_accepts_valid_variables(capsys):
     cmd_plan(_plan_args(outcome_var_ids="1", covariates="2"))
     prov_path = DATA_ROOT / STUDY_ID / "study_plan.provisional.json"
     assert prov_path.exists()
+
+
+def test_matching_criterion_overlap_warns(capsys):
+    """Matching on the comparison variable should produce an advisory warning."""
+    conn = get_connection(STUDY_ID)
+    conn.execute(
+        "INSERT INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (1, ?, 'response', 'outcome', 'categorical') ON CONFLICT(id) DO UPDATE SET role='outcome'",
+        (STUDY_ID,),
+    )
+    conn.execute(
+        "INSERT INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (5, ?, 'treatment_arm', 'baseline', 'categorical') ON CONFLICT(id) DO UPDATE SET role='baseline'",
+        (STUDY_ID,),
+    )
+    conn.commit()
+    conn.close()
+
+    cmd_plan(_plan_args(
+        outcome_var_ids="1",
+        study_type="case_control",
+        comparison="Response by treatment arm",
+        matching_criteria="5",
+    ))
+
+    stderr = capsys.readouterr().err
+    assert "Warning: variable 'treatment_arm' is declared as both" in stderr
+    assert "Matching on the comparison variable can obscure" in stderr
+
+
+def test_matching_criterion_no_overlap_no_warning(capsys):
+    """Matching on a different variable should not trigger the overlap warning."""
+    conn = get_connection(STUDY_ID)
+    conn.execute(
+        "INSERT INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (1, ?, 'response', 'outcome', 'categorical') ON CONFLICT(id) DO UPDATE SET role='outcome'",
+        (STUDY_ID,),
+    )
+    conn.execute(
+        "INSERT INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (5, ?, 'treatment_arm', 'baseline', 'categorical') ON CONFLICT(id) DO UPDATE SET role='baseline'",
+        (STUDY_ID,),
+    )
+    conn.execute(
+        "INSERT INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (3, ?, 'age', 'baseline', 'continuous') ON CONFLICT(id) DO UPDATE SET role='baseline'",
+        (STUDY_ID,),
+    )
+    conn.commit()
+    conn.close()
+
+    cmd_plan(_plan_args(
+        outcome_var_ids="1",
+        study_type="case_control",
+        comparison="Response by treatment arm",
+        matching_criteria="3",  # matching on age, not treatment_arm
+    ))
+
+    stderr = capsys.readouterr().err
+    assert "declared as both a matching criterion" not in stderr
