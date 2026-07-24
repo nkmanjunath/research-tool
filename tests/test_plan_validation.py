@@ -193,3 +193,72 @@ def test_matching_criterion_no_overlap_no_warning(capsys):
 
     stderr = capsys.readouterr().err
     assert "declared as both a matching criterion" not in stderr
+
+
+def _setup_for_lock_test(with_duplicates: bool):
+    """Set up a study with variables, a provisional plan, and optionally duplicates."""
+    conn = get_connection(STUDY_ID)
+    raw = f"raw_{STUDY_ID}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, patient_id TEXT, age TEXT, response TEXT)")
+    conn.execute("DELETE FROM variables WHERE study_id=?", (STUDY_ID,))
+    conn.execute("INSERT INTO variables (id, study_id, column_name, role, data_type) VALUES (1, ?, 'response', 'outcome', 'categorical') ON CONFLICT(id) DO UPDATE SET role='outcome'",
+                 (STUDY_ID,))
+    conn.execute("INSERT INTO variables (id, study_id, column_name, role, data_type) VALUES (2, ?, 'age', 'baseline', 'continuous') ON CONFLICT(id) DO UPDATE SET role='baseline'",
+                 (STUDY_ID,))
+    conn.execute(f"DELETE FROM {raw}")
+    conn.execute(f"INSERT INTO {raw} (patient_id, age, response) VALUES ('P001', '65', 'CR')")
+    conn.execute(f"INSERT INTO {raw} (patient_id, age, response) VALUES ('P002', '70', 'PR')")
+    if with_duplicates:
+        conn.execute(f"INSERT INTO {raw} (patient_id, age, response) VALUES ('P001', '55', 'SD')")
+    conn.commit()
+    conn.close()
+
+    # Seal outcomes so lock_plan's is_masked check passes
+    from core.masking.gate import seal_outcomes
+    seal_outcomes(STUDY_ID)
+
+    # Write a provisional plan
+    import json
+    plan = {
+        "study_id": STUDY_ID, "version": 1,
+        "study_type": "cohort", "primary_comparison": "test",
+        "planned_tests": [{"variable_name": "response", "test_name": "chi_square"}],
+        "primary_outcome_variable_ids": [1],
+        "covariates": [],
+        "matching_criteria": [],
+        "warnings": {},
+    }
+    (DATA_ROOT / STUDY_ID / "study_plan.provisional.json").write_text(json.dumps(plan))
+
+
+def test_lock_rejects_duplicate_ids():
+    """Locking a study with duplicate patient IDs must fail."""
+    _setup_for_lock_test(with_duplicates=True)
+    with pytest.raises(SystemExit):
+        from core.cli.main import cmd_lock
+        import argparse
+        ns = argparse.Namespace(study_id=STUDY_ID, allow_duplicate_ids=False)
+        cmd_lock(ns)
+
+
+def test_lock_allow_duplicate_ids_override():
+    """--allow-duplicate-ids must bypass the duplicate check."""
+    _setup_for_lock_test(with_duplicates=True)
+    from core.cli.main import cmd_lock
+    import argparse
+    ns = argparse.Namespace(study_id=STUDY_ID, allow_duplicate_ids=True)
+    cmd_lock(ns)
+    # Should have produced a locked file
+    locked = list(DATA_ROOT.glob(f"{STUDY_ID}/study_plan.v*.locked.json"))
+    assert len(locked) >= 1
+
+
+def test_lock_no_duplicates_normal():
+    """Locking a study with no duplicates should proceed normally."""
+    _setup_for_lock_test(with_duplicates=False)
+    from core.cli.main import cmd_lock
+    import argparse
+    ns = argparse.Namespace(study_id=STUDY_ID, allow_duplicate_ids=False)
+    cmd_lock(ns)
+    locked = list(DATA_ROOT.glob(f"{STUDY_ID}/study_plan.v*.locked.json"))
+    assert len(locked) >= 1
