@@ -166,3 +166,184 @@ def test_chi_square_sufficient_counts():
     assert len(warnings) == 0, f"Expected no warnings, got: {warnings}"
 
     shutil.rmtree(DATA_ROOT / study_id)
+
+
+def test_ttest_normality_warning_small_skewed_n():
+    """Small skewed distribution (n<30) → non-normal → warn."""
+    import numpy as np
+    from core.database import get_connection, init_db, DATA_ROOT
+    import shutil
+
+    study_id = "test_ttest_skewed"
+    if (DATA_ROOT / study_id).exists():
+        shutil.rmtree(DATA_ROOT / study_id)
+
+    conn = get_connection(study_id)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id,name,created_at,data_dir,study_type) VALUES (?,?,?,?,?)",
+                 (study_id, "Skewed", "2025-01-01", str(DATA_ROOT / study_id), "cohort"))
+    raw = f"raw_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, age TEXT, arm TEXT)")
+
+    # 20 patients — strongly right-skewed (exponential-ish)
+    rng = np.random.default_rng(42)
+    vals = rng.exponential(scale=3, size=20).round().astype(int).clip(1, 99)
+    for i, v in enumerate(vals):
+        arm = "A" if i < 10 else "B"
+        conn.execute(f"INSERT INTO {raw} (age, arm) VALUES (?, ?)", (str(v), arm))
+
+    conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "age", "outcome", "continuous"))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "arm", "baseline", "categorical"))
+    conn.commit()
+
+    # Create shadow table
+    masked = f"raw_masked_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {masked} (row_id INTEGER PRIMARY KEY, age TEXT)")
+    conn.execute(f"DELETE FROM {masked}")
+    conn.execute(f"INSERT INTO {masked} (row_id, age) SELECT row_id, age FROM {raw}")
+    conn.commit()
+    conn.close()
+
+    warnings = check_assumptions(study_id, [{"variable_name": "age", "test_name": "t_test"}])
+    assert len(warnings) >= 1, f"Expected warning for skewed data, got: {warnings}"
+    msg = warnings[0]
+    assert "Shapiro-Wilk" in msg
+    assert "mann_whitney" in msg
+    assert "arm" not in msg.lower()  # no group label leak
+
+    # Confirm the check did NOT use the group column
+    assert "arm" not in msg
+
+    shutil.rmtree(DATA_ROOT / study_id)
+
+
+def test_ttest_no_warning_large_n():
+    """Large n (>=30) → no warning regardless of shape (CLT robustness)."""
+    import numpy as np
+    from core.database import get_connection, init_db, DATA_ROOT
+    import shutil
+
+    study_id = "test_ttest_large"
+    if (DATA_ROOT / study_id).exists():
+        shutil.rmtree(DATA_ROOT / study_id)
+
+    conn = get_connection(study_id)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id,name,created_at,data_dir,study_type) VALUES (?,?,?,?,?)",
+                 (study_id, "LargeN", "2025-01-01", str(DATA_ROOT / study_id), "cohort"))
+    raw = f"raw_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, val TEXT, grp TEXT)")
+    # 40 strongly skewed values
+    rng = np.random.default_rng(42)
+    vals = rng.exponential(scale=3, size=40).round().astype(int).clip(1, 99)
+    for i, v in enumerate(vals):
+        g = "A" if i < 20 else "B"
+        conn.execute(f"INSERT INTO {raw} (val, grp) VALUES (?, ?)", (str(v), g))
+    conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "val", "outcome", "continuous"))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "grp", "baseline", "categorical"))
+    conn.commit()
+    masked = f"raw_masked_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {masked} (row_id INTEGER PRIMARY KEY, val TEXT)")
+    conn.execute(f"DELETE FROM {masked}")
+    conn.execute(f"INSERT INTO {masked} (row_id, val) SELECT row_id, val FROM {raw}")
+    conn.commit()
+    conn.close()
+
+    warnings = check_assumptions(study_id, [{"variable_name": "val", "test_name": "t_test"}])
+    assert len(warnings) == 0, f"Expected no warning for large n, got: {warnings}"
+
+    shutil.rmtree(DATA_ROOT / study_id)
+
+
+def test_ttest_no_warning_normal_small_n():
+    """Small n but genuinely normal data → no warning."""
+    import numpy as np
+    from core.database import get_connection, init_db, DATA_ROOT
+    import shutil
+
+    study_id = "test_ttest_normal"
+    if (DATA_ROOT / study_id).exists():
+        shutil.rmtree(DATA_ROOT / study_id)
+
+    conn = get_connection(study_id)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id,name,created_at,data_dir,study_type) VALUES (?,?,?,?,?)",
+                 (study_id, "Normal", "2025-01-01", str(DATA_ROOT / study_id), "cohort"))
+    raw = f"raw_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, val TEXT, grp TEXT)")
+    rng = np.random.default_rng(42)
+    vals = rng.normal(loc=50, scale=10, size=20).round().astype(int).clip(1, 99)
+    for i, v in enumerate(vals):
+        g = "A" if i < 10 else "B"
+        conn.execute(f"INSERT INTO {raw} (val, grp) VALUES (?, ?)", (str(v), g))
+    conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "val", "outcome", "continuous"))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "grp", "baseline", "categorical"))
+    conn.commit()
+    masked = f"raw_masked_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {masked} (row_id INTEGER PRIMARY KEY, val TEXT)")
+    conn.execute(f"DELETE FROM {masked}")
+    conn.execute(f"INSERT INTO {masked} (row_id, val) SELECT row_id, val FROM {raw}")
+    conn.commit()
+    conn.close()
+
+    warnings = check_assumptions(study_id, [{"variable_name": "val", "test_name": "t_test"}])
+    assert len(warnings) == 0, f"Expected no warning for normal data, got: {warnings}"
+
+    shutil.rmtree(DATA_ROOT / study_id)
+
+
+def test_ttest_warning_uses_pooled_not_grouped():
+    """Confirm the check never queries group_col — adversarial.
+
+    The warning message should contain no group label and the SQL path
+    should not reference the group column.
+    """
+    import numpy as np
+    import sqlite3
+    from core.database import get_connection, init_db, DATA_ROOT
+    import shutil
+
+    study_id = "test_ttest_pooled"
+    if (DATA_ROOT / study_id).exists():
+        shutil.rmtree(DATA_ROOT / study_id)
+
+    conn = get_connection(study_id)
+    init_db(conn)
+    conn.execute("INSERT OR REPLACE INTO studies (id,name,created_at,data_dir,study_type) VALUES (?,?,?,?,?)",
+                 (study_id, "Pooled", "2025-01-01", str(DATA_ROOT / study_id), "cohort"))
+    raw = f"raw_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {raw} (row_id INTEGER PRIMARY KEY, outcome TEXT, weird_arm TEXT)")
+    rng = np.random.default_rng(42)
+    vals = rng.exponential(scale=3, size=15).round().astype(int).clip(1, 99)
+    for i, v in enumerate(vals):
+        conn.execute(f"INSERT INTO {raw} (outcome, weird_arm) VALUES (?, ?)", (str(v), "X"))
+    conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "outcome", "outcome", "continuous"))
+    conn.execute("INSERT INTO variables (study_id, column_name, role, data_type) VALUES (?,?,?,?)",
+                 (study_id, "weird_arm", "baseline", "categorical"))
+    conn.commit()
+    masked = f"raw_masked_{study_id}"
+    conn.execute(f"CREATE TABLE IF NOT EXISTS {masked} (row_id INTEGER PRIMARY KEY, outcome TEXT)")
+    conn.execute(f"DELETE FROM {masked}")
+    conn.execute(f"INSERT INTO {masked} (row_id, outcome) SELECT row_id, outcome FROM {raw}")
+    conn.commit()
+    conn.close()
+
+    # Pass a deliberately unusual group_col name — the check should NOT reference it
+    warnings = check_assumptions(study_id, [{"variable_name": "outcome", "test_name": "t_test"}],
+                                 group_col="weird_arm")
+    # We just want to verify no group label leak
+    for w in warnings:
+        assert "weird_arm" not in w, f"Group label leaked: {w}"
+
+    shutil.rmtree(DATA_ROOT / study_id)

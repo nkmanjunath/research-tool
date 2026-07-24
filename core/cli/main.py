@@ -308,13 +308,21 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         # Enforce assumption warnings from plan time
         plan_warnings = getattr(plan, "warnings", {})
         if var_name in plan_warnings and not force:
+            # Suggest the appropriate alternative based on test type
+            alt_test = {"chi_square": "fisher_exact",
+                        "t_test": "mann_whitney",
+                        "paired_t_test": "wilcoxon_signed_rank"}.get(test_name, "")
+            alt_hint = ""
+            if alt_test:
+                alt_hint = (
+                    f"Redeclare the plan with an alternative test via:\n"
+                    f"  research-tool plan ... --test \"{var_name}:{alt_test}:...\"\n"
+                )
             print(
                 f"Skipping '{test_name}' on '{var_name}' — "
                 f"plan time warning recorded:\n"
                 f"  {plan_warnings[var_name]}\n"
-                f"Use '--force' to run despite warnings, or re-declare the plan with"
-                f" an alternative test via:\n"
-                f"  research-tool plan ... --test \"{var_name}:fisher_exact:...\"",
+                f"Use '--force' to run despite warnings, or {alt_hint}",
                 file=sys.stderr,
             )
             # Record the skipped test in the DB so the audit trail is complete
