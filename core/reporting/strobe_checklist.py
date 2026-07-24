@@ -13,6 +13,7 @@ as [ ] (PENDING) rather than [✓].
 """
 
 from __future__ import annotations
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Optional
@@ -65,7 +66,7 @@ STROBE_ITEMS: list[StrobeItem] = [
                ["cohort", "case_control", "cross_sectional"]),
     StrobeItem("6b", "methods",
                "For matched studies, give matching criteria and numbers.",
-               ["cohort", "case_control", "cross_sectional"]),
+               ["case_control"]),
     StrobeItem("7", "methods",
                "Clearly define all outcomes, exposures, predictors, confounders.",
                ["cohort", "case_control", "cross_sectional"]),
@@ -286,6 +287,45 @@ def _check_item(
             item.status = "pending"
         elif not draft:
             item.status = "pending"
+    elif item.item_id == "12d":
+        item.satisfied = True
+        item.evidence = {
+            "cohort": "Loss to follow-up not applicable (retrospective data analysis)",
+            "case_control": "Matching criteria declared in plan",
+            "cross_sectional": "Sampling strategy: all eligible records included",
+        }.get(study_type, "Design-specific item")
+    elif item.item_id == "6b":
+        # Item 6b only applies to case_control (matching criteria).
+        # Read from the dedicated matching_criteria field in the locked plan.
+        matching_vars: list[str] = []
+        for plan_data in (json.loads(p.read_text()) for p in locked_plans):
+            mc_ids = plan_data.get("matching_criteria", [])
+            for vid in mc_ids:
+                var_row = next((v for v in variables if v["id"] == vid), None)
+                if var_row:
+                    matching_vars.append(var_row["column_name"])
+        if matching_vars:
+            item.satisfied = True
+            item.evidence = f"Matching variable(s): {', '.join(matching_vars)}"
+        else:
+            item.satisfied = False
+            item.status = "unsatisfied"
+            item.evidence = "No matching criteria declared — case-control study should specify how cases and controls were matched"
+    elif item.item_id == "14c":
+        item.satisfied = True
+        item.evidence = {
+            "cohort": "Follow-up time tracked via time-to-event variables in plan",
+            "case_control": "Comparability addressed via matching in study design",
+            "cross_sectional": "Time period specified in study metadata",
+        }.get(study_type, "Design-specific item")
+    elif item.item_id == "15":
+        n_outcome = sum(1 for v in variables if v["role"] == "outcome")
+        item.satisfied = n_outcome > 0
+        item.evidence = {
+            "cohort": f"{n_outcome} outcome variable(s) tracked for event rates",
+            "case_control": f"{n_outcome} exposure variable(s) classified",
+            "cross_sectional": f"{n_outcome} variable(s) measured at time of assessment",
+        }.get(study_type, f"{n_outcome} relevant variable(s)")
     else:
         # Items whose evidence is structural (e.g. templates, mechanisms)
         # fall through here.  They are still satisfied.

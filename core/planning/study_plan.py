@@ -27,6 +27,7 @@ class StudyPlan:
     primary_outcome_variable_ids: list[int] = field(default_factory=list)
     planned_tests: list[dict] = field(default_factory=list)
     covariates: list[int] = field(default_factory=list)
+    matching_criteria: list[int] = field(default_factory=list)
     warnings: dict[str, str] = field(default_factory=dict)
     role_overrides: dict[int, str] = field(default_factory=dict)
     audit: dict = field(default_factory=dict)
@@ -41,5 +42,6 @@ class StudyPlan:
         d.setdefault("warnings", {})
         d.setdefault("role_overrides", {})
         d.setdefault("audit", {})
+        d.setdefault("matching_criteria", [])
         d["role_overrides"] = {int(k): v for k, v in d["role_overrides"].items()}
         return StudyPlan(**d)
