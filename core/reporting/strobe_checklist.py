@@ -20,6 +20,16 @@ from typing import Optional
 
 from core.database import get_connection, DATA_ROOT
 
+
+def _filter_superseded(rows: list) -> list:
+    """Remove superseded analysis results (those replaced by a --rerun)."""
+    superseded_ids = {
+        r["superseded_previous_result_id"]
+        for r in rows
+        if r["superseded_previous_result_id"] is not None
+    }
+    return [r for r in rows if r["id"] not in superseded_ids]
+
 # ── Draft section heading mapping ──────────────────────────────────────
 SECTION_HEADINGS = {
     "title_abstract": "Abstract",
@@ -269,7 +279,7 @@ def check_study(study_id: str) -> list[StrobeItem]:
 
     # Get analysis results
     cur = conn.execute("SELECT * FROM analysis_results WHERE study_id=?", (study_id,))
-    analyses = cur.fetchall()
+    analyses = _filter_superseded(cur.fetchall())
 
     # Count locked plan versions
     locked_plans = list(DATA_ROOT.glob(f"{study_id}/study_plan.v*.locked.json"))

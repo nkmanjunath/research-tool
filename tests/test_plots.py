@@ -269,6 +269,69 @@ def test_default_style_is_clean():
         out_clean.unlink()
 
 
+def test_style_all_produces_three_files(monkeypatch):
+    """--style all must generate three distinct, valid SVG files."""
+    _setup_plan_and_result(with_completed_km=True)
+    import argparse
+    from core.cli.main import cmd_plot_km
+    from core.database import DATA_ROOT
+
+    # Clean up any previous files
+    for f in DATA_ROOT.glob(f"{STUDY_ID}/km_plot_1_*.svg"):
+        f.unlink()
+
+    ns = argparse.Namespace(
+        study_id=STUDY_ID, test_id=1,
+        format="svg", no_risk_table=False, no_medians=False,
+        output=None, time_unit="months", style="all",
+    )
+    cmd_plot_km(ns)
+
+    for style_name in ("clean", "scientific", "presentation"):
+        path = DATA_ROOT / STUDY_ID / f"km_plot_1_{style_name}.svg"
+        assert path.exists(), f"Missing {path}"
+        content = path.read_text()
+        assert "<?xml" in content[:200] or "<svg" in content[:200], \
+            f"{style_name} SVG is not valid"
+        path.unlink()
+
+
+def test_single_styles_dont_overwrite():
+    """Sequential plot-km calls with different --style values must each
+    produce a distinct file, not silently overwrite the previous one."""
+    _setup_plan_and_result(with_completed_km=True)
+    import argparse
+    from core.cli.main import cmd_plot_km
+    from core.database import DATA_ROOT
+
+    # Clean up
+    for f in DATA_ROOT.glob(f"{STUDY_ID}/km_plot_1_*.svg"):
+        f.unlink()
+
+    for style_name in ("clean", "scientific", "presentation"):
+        ns = argparse.Namespace(
+            study_id=STUDY_ID, test_id=1,
+            format="svg", no_risk_table=False, no_medians=False,
+            output=None, time_unit="months", style=style_name,
+        )
+        cmd_plot_km(ns)
+
+    # All three files should exist simultaneously
+    existing = []
+    for style_name in ("clean", "scientific", "presentation"):
+        path = DATA_ROOT / STUDY_ID / f"km_plot_1_{style_name}.svg"
+        assert path.exists(), f"Missing {path} after sequential invocation"
+        existing.append(path)
+
+    # All three should have different sizes (different styles)
+    sizes = {p.stat().st_size for p in existing}
+    assert len(sizes) >= 2, \
+        f"Files should have different sizes (different styles), got {sizes}"
+
+    for p in existing:
+        p.unlink()
+
+
 def test_scientific_vs_presentation_configs_differ():
     """Scientific and presentation presets must have meaningfully different CI alpha values."""
     from core.reporting.plots import _STYLES

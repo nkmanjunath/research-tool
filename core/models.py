@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     status_json       TEXT,          -- JSON: {"status": "completed", "reason": "..."}
     is_pre_registered INTEGER NOT NULL DEFAULT 1,
     provenance_json   TEXT,          -- JSON blob
-    computed_at       TEXT NOT NULL
+    computed_at       TEXT NOT NULL,
+    superseded_previous_result_id INTEGER DEFAULT NULL
 );
 """
 
