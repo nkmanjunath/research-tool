@@ -143,16 +143,32 @@ def _t_test(data: pd.DataFrame, outcome_col: str, group_col: str,
         n = min(len(g1), len(g2))
         stat, p = ttest_rel(g1.iloc[:n], g2.iloc[:n])
         test = "paired_t_test"
-        es = None  # No simple paired Cohen's d without r; skip for now
+        es = None
+        diff = g1.iloc[:n] - g2.iloc[:n]
+        mean_diff = diff.mean()
+        se = diff.std(ddof=1) / (n ** 0.5)
+        df = n - 1
     else:
         stat, p = ttest_ind(g1, g2, equal_var=False)
         test = "t_test"
         es = {"metric": "Cohen's d", "value": _cohens_d(g1, g2)}
+        mean_diff = g1.mean() - g2.mean()
+        v1, v2 = g1.var(ddof=1), g2.var(ddof=1)
+        n1, n2 = len(g1), len(g2)
+        se = ((v1 / n1) + (v2 / n2)) ** 0.5
+        df_num = ((v1 / n1) + (v2 / n2)) ** 2
+        df_den = ((v1 / n1) ** 2 / (n1 - 1)) + ((v2 / n2) ** 2 / (n2 - 1))
+        df = df_num / df_den if df_den > 0 else 1.0
+    from scipy.stats import t as t_dist
+    t_crit = t_dist.ppf(0.975, df)
+    ci_lower = mean_diff - t_crit * se
+    ci_upper = mean_diff + t_crit * se
     n_total = len(g1) + len(g2)
     return _uro(
         test_name=test, statistic=float(stat), p_value=float(p),
         n_analyzed=n_total, effect_size=es,
-        params={"n1": len(g1), "n2": len(g2)},
+        ci_lower=float(ci_lower), ci_upper=float(ci_upper),
+        params={"n1": len(g1), "n2": len(g2), "df": float(df)},
     )
 
 

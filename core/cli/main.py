@@ -381,9 +381,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     conn = get_connection(args.study_id)
     init_db(conn)
 
-    # Parse --force and --post-hoc flags
+    # Parse --force, --post-hoc, --rerun flags
     force = getattr(args, "force", False)
     is_post_hoc = getattr(args, "post_hoc", False)
+    rerun = getattr(args, "rerun", False)
 
     # Determine which test list to run
     test_list = plan.post_hoc_tests if is_post_hoc else plan.planned_tests
@@ -395,6 +396,27 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         test_rationale = t.get("rationale", "")
         if not test_name or not var_name:
             continue
+
+        # Dedup: skip if completed result already exists for this exact test
+        if not rerun:
+            existing = conn.execute(
+                """SELECT id, computed_at FROM analysis_results
+                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                         study_plan_version=? AND is_pre_registered=?
+                         AND json_extract(status_json, '$.status') = 'completed'
+                         AND superseded_previous_result_id IS NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (args.study_id, test_name, json.dumps([]),
+                 plan.version, is_pre_registered),
+            ).fetchone()
+            if existing:
+                print(
+                    f"Test '{test_name}' on '{var_name}' already completed "
+                    f"under plan v{plan.version} (result id {existing['id']}, "
+                    f"computed {existing['computed_at']}). "
+                    f"Skipping — use --rerun to force recomputation."
+                )
+                continue
 
         # For post-hoc tests, scan forward to find which amendment version
         # first declared this specific test (test_name + rationale match)
@@ -492,6 +514,27 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         completed[0]["adjusted_p_value"] = completed[0]["p_value"]
     # Skipped/error results keep adjusted_p_value = None (already set by _uro)
 
+    # Track superseded results for --rerun
+    supersede_map: dict[str, int] = {}
+    if rerun:
+        for t in test_list:
+            var_name = t.get("variable_name", "")
+            test_name = t.get("test_name", "")
+            if not test_name or not var_name:
+                continue
+            existing = conn.execute(
+                """SELECT id FROM analysis_results
+                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                         study_plan_version=? AND is_pre_registered=?
+                         AND json_extract(status_json, '$.status') = 'completed'
+                         AND superseded_previous_result_id IS NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (args.study_id, test_name, json.dumps([]),
+                 plan.version, is_pre_registered),
+            ).fetchone()
+            if existing:
+                supersede_map[test_name] = existing["id"]
+
     now = datetime.now(timezone.utc).isoformat()
     for r in results:
         status_record = {"status": r.get("status", "completed")}
@@ -506,13 +549,15 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             ph_reason = r.get("amendment_reason", "")
             if ph_reason:
                 prov["amendment_reason"] = ph_reason
+        superseded_id = supersede_map.get(r.get("test_name", ""))
         conn.execute(
             """INSERT INTO analysis_results
                (study_id, study_plan_version, variable_ids_used, test_name,
                 statistic, p_value, adjusted_p_value, ci_lower, ci_upper,
                 effect_size_json, sample_counts_json, status_json,
-                is_pre_registered, provenance_json, computed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                is_pre_registered, provenance_json, computed_at,
+                superseded_previous_result_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (args.study_id, stored_version, json.dumps([]),
              r["test_name"], r["statistic"], r["p_value"],
              r.get("adjusted_p_value"), r.get("ci_lower"), r.get("ci_upper"),
@@ -520,7 +565,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
              json.dumps(r["sample_counts"]) if r.get("sample_counts") else None,
              json.dumps(status_record),
              is_pre_registered,
-             json.dumps(prov), now),
+             json.dumps(prov), now,
+             superseded_id),
         )
     conn.commit()
     conn.close()
@@ -570,24 +616,62 @@ def cmd_verify_bundle(args: argparse.Namespace) -> None:
 def cmd_plot_km(args: argparse.Namespace) -> None:
     """Generate a Kaplan-Meier survival curve plot for a completed KM test."""
     from core.reporting.plots import generate_km_plot
+    from pathlib import Path
+
     fmt = getattr(args, "format", "svg")
     show_risk_table = not getattr(args, "no_risk_table", False)
     show_medians = False if getattr(args, "no_medians", False) else None
-    output_path = getattr(args, "output", None)
+    base_output = getattr(args, "output", None)
     time_unit = getattr(args, "time_unit", "months")
     style = getattr(args, "style", "clean")
+
+    styles_to_generate = ["clean", "scientific", "presentation"] if style == "all" else [style]
+
+    generated: list[Path] = []
+    for s in styles_to_generate:
+        if base_output is not None:
+            base = Path(base_output)
+            if style == "all":
+                out = base.with_name(base.stem + f"_{s}" + base.suffix)
+            else:
+                out = base
+        else:
+            # Always include the style name in the default filename so
+            # sequential invocations (--style clean, --style scientific, ...)
+            # don't silently overwrite each other.  This applies even when
+            # the user omits --style entirely (defaults to "clean") — the
+            # resulting km_plot_1_clean.svg is unambiguous and safe.
+            from core.database import DATA_ROOT
+            out = DATA_ROOT / args.study_id / f"km_plot_{args.test_id}_{s}.{fmt}"
+
+        try:
+            path = generate_km_plot(
+                args.study_id, args.test_id,
+                output_path=out,
+                fmt=fmt,
+                show_risk_table=show_risk_table,
+                show_medians=show_medians,
+                time_unit_display=time_unit,
+                style=s,
+            )
+            generated.append(path)
+        except (ValueError, FileNotFoundError) as e:
+            print(f"Error generating {s} style: {e}", file=sys.stderr)
+            if style != "all":
+                sys.exit(1)
+
+    for p in generated:
+        print(f"Kaplan-Meier plot saved to {p}")
+
+
+def cmd_export_excel(args: argparse.Namespace) -> None:
+    """Generate a publication-ready Excel report with KM plot, Table 1, and audit hashes."""
+    from core.reporting.excel_export import generate_excel_report
+    output_path = getattr(args, "output", None)
     try:
-        path = generate_km_plot(
-            args.study_id, args.test_id,
-            output_path=output_path,
-            fmt=fmt,
-            show_risk_table=show_risk_table,
-            show_medians=show_medians,
-            time_unit_display=time_unit,
-            style=style,
-        )
-        print(f"Kaplan-Meier plot saved to {path}")
-    except (ValueError, FileNotFoundError) as e:
+        path = generate_excel_report(args.study_id, output_path=output_path)
+        print(f"Excel report saved to {path}")
+    except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -858,6 +942,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run tests even when the plan has recorded assumption warnings")
     sp.add_argument("--post-hoc", action="store_true",
                     help="Run post-hoc/exploratory tests instead of pre-registered tests")
+    sp.add_argument("--rerun", action="store_true",
+                    help="Force recomputation even if a completed result already exists")
     sp.set_defaults(func=cmd_analyze)
 
     # strobe-check
@@ -894,8 +980,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Custom output file path (overrides default naming)")
     sp.add_argument("--time-unit", choices=["days", "months"], default="months",
                     help="Display unit for the x-axis (default: months)")
-    sp.add_argument("--style", choices=["clean", "scientific", "presentation"], default="clean",
-                    help="Visual preset for the plot (default: clean)")
+    sp.add_argument("--style", choices=["clean", "scientific", "presentation", "all"], default="clean",
+                    help="Visual preset for the plot (default: clean; use 'all' to generate all three)")
     sp.set_defaults(func=cmd_plot_km)
 
     # export
@@ -906,6 +992,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--format", choices=["json", "appendix"], default="json",
                     help="Export JSON, or JSON plus a manuscript appendix Markdown file")
     sp.set_defaults(func=cmd_export)
+
+    # export-excel
+    sp = sub.add_parser("export-excel",
+                        help="Generate a publication-ready Excel report with KM plot, Table 1, and audit")
+    sp.add_argument("study_id")
+    sp.add_argument("--output", type=str, help="Custom output file path")
+    sp.set_defaults(func=cmd_export_excel)
 
     return p
 

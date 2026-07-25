@@ -34,9 +34,12 @@ def test_fishers_exact():
 
 def test_t_test():
     df = _make_df()
-    result = run_test("t_test", df, "continuous", "group")
+    result = run_test("t_test", df, "outcome", "group")
     assert result["test_name"] == "t_test"
     assert result["statistic"] is not None
+    assert result["ci_lower"] is not None
+    assert result["ci_upper"] is not None
+    assert result["ci_lower"] < result["ci_upper"]
 
 
 def test_mann_whitney():

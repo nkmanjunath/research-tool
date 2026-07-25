@@ -61,7 +61,7 @@ def _set_state(state: int):
 def _lock_v1():
     """Lock a simple v1 plan (must be called while still masked)."""
     plan = StudyPlan(study_id=STUDY_ID, study_type="cohort", primary_comparison="test",
-                     planned_tests=[{"variable_name": "response", "test_name": "chi_square"}])
+                     planned_tests=[{"variable_name": "age", "test_name": "t_test"}])
     lock_plan(STUDY_ID, plan)
 
 
@@ -197,3 +197,60 @@ def test_lock_plan_still_refuses_after_unmask():
                      planned_tests=[{"variable_name": "response", "test_name": "chi_square"}])
     with pytest.raises(RuntimeError, match="Cannot lock a plan after unmasking"):
         lock_plan(STUDY_ID, plan)
+
+
+def test_analyze_dedup_no_rerun():
+    """Analyze must skip tests that already have a completed result."""
+    _lock_v1()
+    _set_state(2)
+    import argparse
+    from core.cli.main import cmd_analyze
+
+    # First analyze — should run
+    ns = argparse.Namespace(study_id=STUDY_ID, force=False, post_hoc=False, rerun=False)
+    cmd_analyze(ns)
+
+    conn = get_connection(STUDY_ID)
+    count1 = conn.execute(
+        "SELECT COUNT(*) as cnt FROM analysis_results WHERE study_id=?", (STUDY_ID,)
+    ).fetchone()["cnt"]
+    conn.close()
+    assert count1 == 1, f"Expected 1 result after first analyze, got {count1}"
+
+    # Second analyze — should skip
+    cmd_analyze(ns)
+
+    conn = get_connection(STUDY_ID)
+    count2 = conn.execute(
+        "SELECT COUNT(*) as cnt FROM analysis_results WHERE study_id=?", (STUDY_ID,)
+    ).fetchone()["cnt"]
+    conn.close()
+    assert count2 == 1, f"Expected still 1 result after skip, got {count2}"
+
+
+def test_analyze_rerun_creates_new_supersedes_old():
+    """--rerun must produce a new result and mark old as superseded."""
+    _lock_v1()
+    _set_state(2)
+    import argparse
+    from core.cli.main import cmd_analyze
+
+    ns = argparse.Namespace(study_id=STUDY_ID, force=False, post_hoc=False, rerun=False)
+    cmd_analyze(ns)
+
+    # Rerun with --rerun
+    ns.rerun = True
+    cmd_analyze(ns)
+
+    conn = get_connection(STUDY_ID)
+    rows = conn.execute(
+        "SELECT id, superseded_previous_result_id FROM analysis_results WHERE study_id=? ORDER BY id",
+        (STUDY_ID,),
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 2, f"Expected 2 rows after rerun, got {len(rows)}"
+    # First row should have NULL superseded (it's the original)
+    assert rows[0]["superseded_previous_result_id"] is None
+    # Second row should point to first
+    assert rows[1]["superseded_previous_result_id"] == rows[0]["id"], \
+        f"Second row should supersede first. Got {rows[1]['superseded_previous_result_id']} vs {rows[0]['id']}"

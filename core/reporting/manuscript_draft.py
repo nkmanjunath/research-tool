@@ -26,6 +26,20 @@ def _json_field(row, field: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _filter_superseded(rows: list) -> list:
+    """Remove superseded analysis results (those replaced by a --rerun).
+
+    A result is superseded if its ``id`` appears as another row's
+    ``superseded_previous_result_id``.
+    """
+    superseded_ids = {
+        r["superseded_previous_result_id"]
+        for r in rows
+        if r["superseded_previous_result_id"] is not None
+    }
+    return [r for r in rows if r["id"] not in superseded_ids]
+
+
 def _format_analysis_result(a) -> str:
     """Format a single analysis result as markdown."""
     import json
@@ -130,6 +144,7 @@ def generate_limitations(study_id: str) -> str:
     analyses = conn.execute(
         "SELECT * FROM analysis_results WHERE study_id=? ORDER BY id", (study_id,)
     ).fetchall()
+    analyses = _filter_superseded(analyses)
     limitations: list[str] = []
 
     # 1. Retrospective design (always true for this tool's scope)
@@ -256,8 +271,8 @@ def generate_draft(study_id: str) -> str:
     cur = conn.execute("SELECT * FROM variables WHERE study_id=?", (study_id,))
     variables = cur.fetchall()
 
-    cur = conn.execute("SELECT * FROM analysis_results WHERE study_id=?", (study_id,))
-    analyses = cur.fetchall()
+    cur = conn.execute("SELECT * FROM analysis_results WHERE study_id=? ORDER BY id", (study_id,))
+    analyses = _filter_superseded(cur.fetchall())
 
     conn.close()
 
