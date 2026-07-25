@@ -195,8 +195,8 @@ def test_cox_epv_uses_events_not_observations():
 
 def test_key_results_counts_statuses_without_editorializing():
     assert generate_key_results([
-        {"status_json": json.dumps({"status": "completed"})},
-        {"status_json": json.dumps({"status": "skipped_assumption_violation"})},
+        {"is_pre_registered": 1, "status_json": json.dumps({"status": "completed"})},
+        {"is_pre_registered": 1, "status_json": json.dumps({"status": "skipped_assumption_violation"})},
     ]) == (
         "**Key results:** Of 2 pre-registered test(s), 1 completed successfully "
         "and 1 was skipped due to an assumption violation."

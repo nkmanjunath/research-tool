@@ -31,6 +31,8 @@ class StudyPlan:
     warnings: dict[str, str] = field(default_factory=dict)
     role_overrides: dict[int, str] = field(default_factory=dict)
     audit: dict = field(default_factory=dict)
+    post_hoc_tests: list[dict] = field(default_factory=list)
+    amendment_reason: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -43,5 +45,7 @@ class StudyPlan:
         d.setdefault("role_overrides", {})
         d.setdefault("audit", {})
         d.setdefault("matching_criteria", [])
+        d.setdefault("post_hoc_tests", [])
+        d.setdefault("amendment_reason", "")
         d["role_overrides"] = {int(k): v for k, v in d["role_overrides"].items()}
         return StudyPlan(**d)

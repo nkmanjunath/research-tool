@@ -26,11 +26,56 @@ def _json_field(row, field: str) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _format_analysis_result(a) -> str:
+    """Format a single analysis result as markdown."""
+    import json
+    tag = ""
+    reason_line = ""
+    rationale_suffix = ""
+    if not a["is_pre_registered"]:
+        tag = " **[EXPLORATORY_POST_HOC]**"
+        # Amendment reason was stored in provenance_json at analyze time
+        prov = _json_field(a, "provenance_json")
+        reason = prov.get("amendment_reason", "")
+        if reason:
+            reason_line = f"  Reason: {reason}\n"
+        r = prov.get("rationale", "")
+        if r:
+            rationale_suffix = f" — {r}"
+    es = json.loads(a["effect_size_json"]) if a["effect_size_json"] else None
+    es_str = f" ({es['metric']}={es['value']:.3f})" if es else ""
+    lines = [
+        f"**Test:** {a['test_name']}{rationale_suffix}{tag}\n",
+    ]
+    if reason_line:
+        lines.append(reason_line)
+    if a["statistic"] is not None:
+        lines.append(f"  Statistic: {a['statistic']:.4f}\n")
+    if a["p_value"] is not None:
+        sig = " (significant)" if a["p_value"] < 0.05 else ""
+        lines.append(f"  P-value: {a['p_value']:.4f}{sig}\n")
+    if es:
+        lines.append(f"  Effect size: {es['metric']} = {es['value']:.3f}\n")
+    if a["ci_lower"] is not None and a["ci_upper"] is not None:
+        lines.append(f"  95% CI: ({a['ci_lower']:.3f}, {a['ci_upper']:.3f})\n")
+    if a["adjusted_p_value"] is not None:
+        lines.append(f"  Corrected p-value: {a['adjusted_p_value']:.4f}\n")
+    lines.append("\n")
+    return "".join(lines)
+
+
 def generate_key_results(analyses) -> str:
-    """Return factual analysis-status counts without editorial interpretation."""
+    """Return factual analysis-status counts without editorial interpretation.
+
+    Counts only pre-registered results (is_pre_registered=1).
+    Post-hoc results are reported separately elsewhere.
+    """
     if not analyses:
         return "**Key results:** [Summarise key results with reference to study objectives]."
-    statuses = [_json_field(a, "status_json").get("status", "completed") for a in analyses]
+    pre_reg = [a for a in analyses if a["is_pre_registered"]]
+    if not pre_reg:
+        return "**Key results:** No pre-registered tests were completed."
+    statuses = [_json_field(a, "status_json").get("status", "completed") for a in pre_reg]
     n_completed = statuses.count("completed")
     n_skipped = statuses.count("skipped_assumption_violation")
     n_errors = len(statuses) - n_completed - n_skipped
@@ -224,18 +269,19 @@ def generate_draft(study_id: str) -> str:
 
     # ── Abstract ────────────────────────────────────────────────────────────
     n_vars = len(variables)
-    n_analyses = len(analyses)
+    pre_reg = [a for a in analyses if a["is_pre_registered"]]
+    n_pre_reg = len(pre_reg)
 
-    if n_analyses > 0:
+    if n_pre_reg > 0:
         statuses = [
             (_json_field(a, "status_json").get("status", "completed"))
-            for a in analyses
+            for a in pre_reg
         ]
         n_completed = statuses.count("completed")
-        n_total = len(statuses)
         results_line = (
-            f"{n_completed} of {n_total} pre-registered tests completed"
-            f"{'; see Results for details' if n_total > 0 else ''}."
+            f"{n_completed} of {n_pre_reg} pre-registered test"
+            f"{'s' if n_pre_reg != 1 else ''} completed"
+            f"{'; see Results for details' if n_pre_reg > 0 else ''}."
         )
     else:
         results_line = "[Results summary — not yet computed or will be filled during hydration]"
@@ -246,7 +292,8 @@ def generate_draft(study_id: str) -> str:
         f"**Methods:** {n_vars} variables were classified "
         f"({sum(1 for v in variables if v['role'] == 'baseline')} baseline, "
         f"{sum(1 for v in variables if v['role'] == 'outcome')} outcome). "
-        f"Analysis included {n_analyses} pre-registered tests.\n\n"
+        f"Analysis included {n_pre_reg} pre-registered test"
+        f"{'s' if n_pre_reg != 1 else ''}.\n\n"
         f"**Results:** {results_line}\n\n"
         f"**Conclusions:** [To be completed based on results]"
     )
@@ -288,6 +335,40 @@ def generate_draft(study_id: str) -> str:
         f"via the research tool's stats engine.\n\n"
     )
 
+    # ── Protocol Amendments subsection (for v2+ plans) ──────────────────
+    ph_plans = sorted(
+        p for p in locked_plans
+        if p.name.startswith("study_plan.v") and p.name.endswith(".locked.json")
+    )
+    amendments_to_log = []
+    for p in ph_plans:
+        try:
+            ver_str = p.stem.split(".v")[1].split(".")[0]
+            version = int(ver_str)
+        except (IndexError, ValueError):
+            continue
+        if version <= 1:
+            continue
+        try:
+            import json
+            data = json.loads(p.read_text())
+        except Exception:
+            continue
+        amendment_reason = data.get("amendment_reason", "")
+        if not amendment_reason:
+            continue
+        locked_at = data.get("locked_at", "?")
+        amendments_to_log.append((version, locked_at, amendment_reason))
+
+    if amendments_to_log:
+        methods += "**Protocol Amendments:**\n\n"
+        for version, locked_at, reason in amendments_to_log:
+            methods += (
+                f"- Amendment v{version}: {reason} "
+                f"(recorded {locked_at[:10]})\n"
+            )
+        methods += "\n"
+
     # ── Results ─────────────────────────────────────────────────────────────
     results_section = "## Results\n\n"
 
@@ -300,7 +381,7 @@ def generate_draft(study_id: str) -> str:
     tbl = generate_table1(study_id, groupby=groupby)
     results_section += "**Table 1: Baseline Characteristics**\n\n"
     if not tbl.empty:
-        # Flatten MultiIndex columns: ('Grouped by treatment_arm', 'A') → 'A'
+        # Flatten MultiIndex columns and row index
         if hasattr(tbl.columns, 'levels') or (
             len(tbl.columns) > 0 and isinstance(tbl.columns[0], tuple)
         ):
@@ -308,37 +389,36 @@ def generate_draft(study_id: str) -> str:
                 str(c[-1]).strip() if isinstance(c, tuple) else str(c)
                 for c in tbl.columns
             ]
-        results_section += tbl.to_markdown(index=False) + "\n\n"
+        if hasattr(tbl.index, 'levels'):
+            tbl.index = [
+                (str(i[0]).strip() + ": " + str(i[1]).strip())
+                if isinstance(i, tuple) and str(i[1]).strip()
+                else str(i[0]).strip() if isinstance(i, tuple)
+                else str(i)
+                for i in tbl.index
+            ]
+        results_section += tbl.to_markdown(index=True) + "\n\n"
     else:
         results_section += "[Table 1 not yet computed — run `research-tool table1`]\n\n"
 
     if analyses:
-        for a in analyses:
-            import json
-            tag = ""
-            if not a["is_pre_registered"]:
-                tag = " **[EXPLORATORY_POST_HOC]**"
-            es = json.loads(a["effect_size_json"]) if a["effect_size_json"] else None
-            es_str = f" ({es['metric']}={es['value']:.3f})" if es else ""
-            results_section += (
-                f"**Test:** {a['test_name']}{tag}\n"
-            )
-            if a["statistic"] is not None:
-                results_section += f"  Statistic: {a['statistic']:.4f}\n"
-            if a["p_value"] is not None:
-                sig = " (significant)" if a["p_value"] < 0.05 else ""
-                results_section += f"  P-value: {a['p_value']:.4f}{sig}\n"
-            if es:
-                results_section += (
-                    f"  Effect size: {es['metric']} = {es['value']:.3f}\n"
-                )
-            if a["ci_lower"] is not None and a["ci_upper"] is not None:
-                results_section += (
-                    f"  95% CI: ({a['ci_lower']:.3f}, {a['ci_upper']:.3f})\n"
-                )
-            if a["adjusted_p_value"] is not None:
-                results_section += f"  Corrected p-value: {a['adjusted_p_value']:.4f}\n"
-            results_section += "\n"
+        # Separate pre-registered and post-hoc results
+        pre_reg = [a for a in analyses if a["is_pre_registered"]]
+        post_hoc = [a for a in analyses if not a["is_pre_registered"]]
+
+        # ── Primary Pre-Registered Analysis ──────────────────────────────
+        if pre_reg:
+            results_section += "### Primary Pre-Registered Analysis\n\n"
+            for a in pre_reg:
+                results_section += _format_analysis_result(a)
+
+        # ── Post-Hoc / Exploratory Analyses ──────────────────────────────
+        if post_hoc:
+            results_section += "### Post-Hoc / Exploratory Analyses\n\n"
+            for a in post_hoc:
+                results_section += _format_analysis_result(a)
+        else:
+            results_section += "**Exploratory analyses:** None recorded.\n\n"
     else:
         results_section += (
             "**Primary analysis:** [Not yet computed — run `research-tool analyze`]\n\n"
@@ -348,6 +428,23 @@ def generate_draft(study_id: str) -> str:
     # ── Discussion ──────────────────────────────────────────────────────────
     limitations_text = generate_limitations(study_id)
     key_results = generate_key_results(analyses) + "\n\n"
+
+    # Count-disclosure sentence for post-hoc analyses
+    if analyses:
+        post_hoc_results = [a for a in analyses if not a["is_pre_registered"]]
+        if post_hoc_results:
+            n_ph = len(post_hoc_results)
+            n_ph_sig = sum(
+                1 for a in post_hoc_results
+                if a["p_value"] is not None and a["p_value"] < 0.05
+            )
+            key_results += (
+                f"{n_ph} additional post-hoc/exploratory analyses were performed; "
+                f"{n_ph_sig} of the {n_ph} post-hoc analyses reached p < 0.05. "
+                f"Pre-registered and post-hoc analyses were each corrected for "
+                f"multiple comparisons within their own family, not pooled "
+                f"together, consistent with their different evidentiary status.\n\n"
+            )
     limitations_section = (
         "**Limitations:**\n\n" + limitations_text + "\n\n"
     ) if limitations_text else (
@@ -392,6 +489,15 @@ def generate_draft(study_id: str) -> str:
         f"---\n\n"
         f"{strobe_section}\n"
     )
+
+    # ── Enforcement: post-hoc results must have a post-hoc section header ──
+    if analyses and any(not a["is_pre_registered"] for a in analyses):
+        if "Post-Hoc / Exploratory Analyses" not in draft:
+            raise ValueError(
+                "Post-hoc/exploratory results exist but the draft is missing "
+                "the 'Post-Hoc / Exploratory Analyses' section header — "
+                "this must never be silently omitted."
+            )
 
     return draft
 

@@ -13,6 +13,7 @@ dependencies = [
     "statsmodels>=0.14",
     "lifelines>=0.27",
     "tableone>=0.8",
+    "matplotlib>=3.8",
 ]
 
 [dependency-groups]

@@ -19,7 +19,7 @@ from core.ingestion.csv_loader import load_file
 from core.ingestion.variable_classifier import classify_variables_interactive, _classify_batch
 from core.masking.gate import seal_outcomes, is_masked
 from core.planning.study_plan import StudyPlan
-from core.planning.lock import lock_plan, load_plan, unmask_study
+from core.planning.lock import lock_plan, lock_amendment, load_plan, unmask_study
 from core.planning.test_selector import check_assumptions
 from core.stats.descriptive import generate_table1
 from core.stats.inferential import run_test
@@ -290,6 +290,45 @@ def cmd_lock(args: argparse.Namespace) -> None:
     print(f"Plan locked: {path}")
 
 
+def cmd_amend(args: argparse.Namespace) -> None:
+    """Amend a locked study plan (pre-unmask or post-hoc)."""
+    reason = getattr(args, "reason", "")
+    if not reason:
+        print("Error: --reason is required for any amendment.", file=sys.stderr)
+        sys.exit(1)
+
+    is_post_hoc = getattr(args, "post_hoc", False)
+
+    # Parse tests from --test flags
+    tests = []
+    raw_tests = getattr(args, "tests", []) or []
+    for t in raw_tests:
+        parts = t.split(":", 2)
+        var_name = parts[0] if len(parts) > 0 else ""
+        test_name = parts[1] if len(parts) > 1 else ""
+        rationale = parts[2] if len(parts) > 2 else ""
+        tests.append({"variable_name": var_name, "test_name": test_name, "rationale": rationale})
+
+    try:
+        if is_post_hoc:
+            path = lock_amendment(
+                args.study_id,
+                amendment_reason=reason,
+                post_hoc_tests=tests,
+            )
+            print(f"Post-hoc amendment saved as version {path.stem.split('.v')[1]}: {reason}")
+        else:
+            path = lock_amendment(
+                args.study_id,
+                amendment_reason=reason,
+                planned_tests=tests,
+            )
+            print(f"Amendment saved as version {path.stem.split('.v')[1]}: {reason}")
+    except (ValueError, RuntimeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_unmask(args: argparse.Namespace) -> None:
     """Unmask outcome data (irreversible)."""
     unmask_study(args.study_id)
@@ -342,14 +381,46 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     conn = get_connection(args.study_id)
     init_db(conn)
 
-    # Parse --force flag
+    # Parse --force and --post-hoc flags
     force = getattr(args, "force", False)
+    is_post_hoc = getattr(args, "post_hoc", False)
 
-    for t in plan.planned_tests:
+    # Determine which test list to run
+    test_list = plan.post_hoc_tests if is_post_hoc else plan.planned_tests
+    is_pre_registered = 0 if is_post_hoc else 1
+
+    for t in test_list:
         var_name = t.get("variable_name", "")
         test_name = t.get("test_name", "")
+        test_rationale = t.get("rationale", "")
         if not test_name or not var_name:
             continue
+
+        # For post-hoc tests, scan forward to find which amendment version
+        # first declared this specific test (test_name + rationale match)
+        # and record its amendment_reason and declaring version.
+        ph_reason = ""
+        declaring_version = plan.version
+        if is_post_hoc:
+            for v in range(1, plan.version + 1):
+                try:
+                    p = load_plan(args.study_id, version=v)
+                except Exception:
+                    continue
+                reason = getattr(p, "amendment_reason", "")
+                if not reason:
+                    continue
+                for pt in p.post_hoc_tests:
+                    if pt.get("test_name") == test_name and (
+                        not test_rationale
+                        or not pt.get("rationale", "")
+                        or pt.get("rationale", "") == test_rationale
+                    ):
+                        ph_reason = reason
+                        declaring_version = v
+                        break
+                if ph_reason:
+                    break
 
         # Enforce assumption warnings from plan time
         plan_warnings = getattr(plan, "warnings", {})
@@ -383,6 +454,9 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
                 "status": "skipped_assumption_violation",
                 "reason": plan_warnings[var_name],
+                "rationale": test_rationale,
+                "amendment_reason": ph_reason,
+                "declaring_version": declaring_version,
             }
             results.append(skipped_uro)
             continue
@@ -398,6 +472,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         result = run_test(test_name, df, **kwargs)
         result["status"] = "completed"
         result["reason"] = None
+        result["rationale"] = t.get("rationale", "")
+        result["variable_name"] = var_name
+        result["amendment_reason"] = ph_reason
+        result["declaring_version"] = declaring_version
         if result.get("params", {}).get("error"):
             result["status"] = "error"
             result["reason"] = result["params"]["error"]
@@ -419,20 +497,30 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         status_record = {"status": r.get("status", "completed")}
         if r.get("reason"):
             status_record["reason"] = r["reason"]
+        stored_version = r.get("declaring_version", plan.version) if is_post_hoc else plan.version
+        prov = {"plan_version": stored_version}
+        if is_post_hoc:
+            rationale = r.get("rationale", "")
+            if rationale:
+                prov["rationale"] = rationale
+            ph_reason = r.get("amendment_reason", "")
+            if ph_reason:
+                prov["amendment_reason"] = ph_reason
         conn.execute(
             """INSERT INTO analysis_results
                (study_id, study_plan_version, variable_ids_used, test_name,
                 statistic, p_value, adjusted_p_value, ci_lower, ci_upper,
                 effect_size_json, sample_counts_json, status_json,
                 is_pre_registered, provenance_json, computed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
-            (args.study_id, plan.version, json.dumps([]),
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (args.study_id, stored_version, json.dumps([]),
              r["test_name"], r["statistic"], r["p_value"],
              r.get("adjusted_p_value"), r.get("ci_lower"), r.get("ci_upper"),
              json.dumps(r["effect_size"]) if r.get("effect_size") else None,
              json.dumps(r["sample_counts"]) if r.get("sample_counts") else None,
              json.dumps(status_record),
-             json.dumps({"plan_version": plan.version}), now),
+             is_pre_registered,
+             json.dumps(prov), now),
         )
     conn.commit()
     conn.close()
@@ -479,6 +567,31 @@ def cmd_verify_bundle(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_plot_km(args: argparse.Namespace) -> None:
+    """Generate a Kaplan-Meier survival curve plot for a completed KM test."""
+    from core.reporting.plots import generate_km_plot
+    fmt = getattr(args, "format", "svg")
+    show_risk_table = not getattr(args, "no_risk_table", False)
+    show_medians = False if getattr(args, "no_medians", False) else None
+    output_path = getattr(args, "output", None)
+    time_unit = getattr(args, "time_unit", "months")
+    style = getattr(args, "style", "clean")
+    try:
+        path = generate_km_plot(
+            args.study_id, args.test_id,
+            output_path=output_path,
+            fmt=fmt,
+            show_risk_table=show_risk_table,
+            show_medians=show_medians,
+            time_unit_display=time_unit,
+            style=style,
+        )
+        print(f"Kaplan-Meier plot saved to {path}")
+    except (ValueError, FileNotFoundError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_export(args: argparse.Namespace) -> None:
     """Export study as study_result.v1.json (portable, reviewer-ready)."""
     import json
@@ -521,6 +634,9 @@ def cmd_export(args: argparse.Namespace) -> None:
 
         # ── Table 1 (baseline) ───────────────────────────────────────────
         "table1": None,
+
+        # ── Analysis summary ─────────────────────────────────────────────
+        "analysis_summary": None,
     }
 
     # Variables
@@ -612,6 +728,21 @@ def cmd_export(args: argparse.Namespace) -> None:
             "rows": rows,
         }
 
+    # Analysis summary
+    pre_reg = [r for r in export["analysis_results"] if r.get("is_pre_registered")]
+    post_hoc = [r for r in export["analysis_results"] if not r.get("is_pre_registered")]
+    export["analysis_summary"] = {
+        "n_pre_registered": len(pre_reg),
+        "n_pre_registered_completed": sum(
+            1 for r in pre_reg if r.get("status") == "completed"
+        ),
+        "n_post_hoc": len(post_hoc),
+        "n_post_hoc_significant": sum(
+            1 for r in post_hoc
+            if r.get("p_value") is not None and r["p_value"] < 0.05
+        ),
+    }
+
     # Data hash for authenticity (SHA-256 of raw_data JSON)
     try:
         cur = conn.execute(f"SELECT json_row FROM raw_data WHERE study_id=? ORDER BY row_id", (args.study_id,))
@@ -696,6 +827,17 @@ def build_parser() -> argparse.ArgumentParser:
                          "the same patient legitimately appears in multiple rows)")
     sp.set_defaults(func=cmd_lock)
 
+    # amend
+    sp = sub.add_parser("amend", help="Amend a locked study plan")
+    sp.add_argument("study_id")
+    sp.add_argument("--post-hoc", action="store_true",
+                    help="Post-hoc/exploratory amendment (requires unmasked study)")
+    sp.add_argument("--reason", required=True,
+                    help="Required human-readable reason for this amendment")
+    sp.add_argument("--test", action="append", dest="tests",
+                    help="Test to add in format 'var_name:test_name:rationale'")
+    sp.set_defaults(func=cmd_amend)
+
     # unmask
     sp = sub.add_parser("unmask", help="Unmask outcome data (irreversible)")
     sp.add_argument("study_id")
@@ -714,6 +856,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("study_id")
     sp.add_argument("--force", action="store_true",
                     help="Run tests even when the plan has recorded assumption warnings")
+    sp.add_argument("--post-hoc", action="store_true",
+                    help="Run post-hoc/exploratory tests instead of pre-registered tests")
     sp.set_defaults(func=cmd_analyze)
 
     # strobe-check
@@ -735,6 +879,24 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("verify-bundle", help="Verify a bundle archive's integrity")
     sp.add_argument("bundle_path", help="Path to the .tar.gz bundle file")
     sp.set_defaults(func=cmd_verify_bundle)
+
+    # plot-km
+    sp = sub.add_parser("plot-km", help="Generate a Kaplan-Meier survival curve plot")
+    sp.add_argument("study_id")
+    sp.add_argument("test_id", type=int, help="ID of the completed kaplan_meier_logrank analysis result")
+    sp.add_argument("--format", choices=["svg", "pdf"], default="svg",
+                    help="Output format (default: svg)")
+    sp.add_argument("--no-risk-table", action="store_true",
+                    help="Hide the at-risk table subplot")
+    sp.add_argument("--no-medians", action="store_true",
+                    help="Hide median survival reference lines and callouts")
+    sp.add_argument("--output", type=str,
+                    help="Custom output file path (overrides default naming)")
+    sp.add_argument("--time-unit", choices=["days", "months"], default="months",
+                    help="Display unit for the x-axis (default: months)")
+    sp.add_argument("--style", choices=["clean", "scientific", "presentation"], default="clean",
+                    help="Visual preset for the plot (default: clean)")
+    sp.set_defaults(func=cmd_plot_km)
 
     # export
     sp = sub.add_parser("export", help="Export study as JSON (portable reviewer format)")
