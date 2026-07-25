@@ -895,6 +895,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "lifelines" },
+    { name = "matplotlib" },
     { name = "pandas" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -910,6 +911,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "lifelines", specifier = ">=0.27" },
+    { name = "matplotlib", specifier = ">=3.8" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "scipy", specifier = ">=1.11" },
     { name = "statsmodels", specifier = ">=0.14" },

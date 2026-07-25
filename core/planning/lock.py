@@ -117,3 +117,107 @@ def load_plan(study_id: str, version: int | None = None) -> StudyPlan:
 def unmask_study(study_id: str) -> None:
     """Unmask the study — irreversibly reveals outcome data."""
     gate_unmask(study_id)
+
+
+def lock_amendment(
+    study_id: str,
+    *,
+    amendment_reason: str,
+    planned_tests: list[dict] | None = None,
+    post_hoc_tests: list[dict] | None = None,
+) -> Path:
+    """Write a new versioned plan file for an amendment.
+
+    This is a separate function from ``lock_plan()`` — do not modify
+    ``lock_plan()``.  ``lock_plan()``'s unconditional refusal to lock after
+    unmasking is the tool's core HARKing prevention guarantee and must not
+    accept any bypass parameter.
+
+    Parameters
+    ----------
+    study_id : str
+    amendment_reason : str
+        Required human-readable explanation for the amendment.
+    planned_tests : list[dict], optional
+        New pre-registered tests (pre-unmask amendment).  Only one of
+        ``planned_tests`` or ``post_hoc_tests`` may be set.
+    post_hoc_tests : list[dict], optional
+        New post-hoc/exploratory tests (post-unmask amendment).
+
+    Returns
+    -------
+    Path to the written lock file.
+
+    Raises
+    ------
+    ValueError
+        If ``amendment_reason`` is empty, or both/both-none of the test
+        lists are provided, or state constraints are violated.
+    RuntimeError
+        If study has already been unmasked when trying a pre-unmask
+        amendment (planned_tests), or if study has NOT been unmasked when
+        trying a post-hoc amendment (post_hoc_tests).
+    """
+    if not amendment_reason:
+        raise ValueError("amendment_reason is required for any amendment.")
+
+    if not planned_tests and not post_hoc_tests:
+        raise ValueError("Must provide either planned_tests (pre-unmask) or post_hoc_tests (post-hoc).")
+    if planned_tests and post_hoc_tests:
+        raise ValueError("Cannot provide both planned_tests and post_hoc_tests in one amendment.")
+
+    # Load the latest locked plan to preserve existing state
+    latest = load_plan(study_id)
+
+    # ── State enforcement ─────────────────────────────────────────────
+    conn = get_connection(study_id)
+    cur = conn.execute("SELECT is_locked FROM studies WHERE id=?", (study_id,))
+    row = cur.fetchone()
+    state = row["is_locked"] if row else 0
+    conn.close()
+
+    if planned_tests is not None:
+        # Pre-unmask amendment: study must still be locked/masked (state < 2)
+        if state >= 2:
+            raise RuntimeError(
+                f"Cannot amend study '{study_id}' with pre-registered tests "
+                f"after unmasking. The study has already been unmasked — "
+                f"use lock_amendment(..., post_hoc_tests=...) for post-hoc "
+                f"amendments instead."
+            )
+        new_planned = list(planned_tests)
+        new_post_hoc = list(latest.post_hoc_tests)  # preserve any existing post-hoc tests
+    else:
+        # Post-hoc amendment: study must be unmasked (state == 2)
+        if state < 2:
+            raise RuntimeError(
+                f"Cannot add post-hoc tests to study '{study_id}' before "
+                f"unmasking. Post-hoc amendments require unmasked data."
+            )
+        new_planned = list(latest.planned_tests)
+        new_post_hoc = list(latest.post_hoc_tests) + list(post_hoc_tests)
+
+    # ── Build the new plan ────────────────────────────────────────────
+    plan = StudyPlan(
+        study_id=study_id,
+        study_type=latest.study_type,
+        primary_comparison=latest.primary_comparison,
+        primary_outcome_variable_ids=list(latest.primary_outcome_variable_ids),
+        planned_tests=new_planned,
+        covariates=list(latest.covariates),
+        matching_criteria=list(latest.matching_criteria),
+        warnings=dict(latest.warnings),
+        role_overrides=dict(latest.role_overrides),
+        audit=dict(latest.audit),
+        post_hoc_tests=new_post_hoc,
+        amendment_reason=amendment_reason,
+    )
+
+    plan.version = _next_version(study_id)
+    plan.locked_at = None
+    data = plan.to_dict()
+    data["content_hash"] = _compute_hash(data)
+
+    path = _plan_path(study_id, plan.version)
+    path.write_text(json.dumps(data, indent=2))
+    return path

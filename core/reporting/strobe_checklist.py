@@ -385,6 +385,24 @@ def _check_item(
             "case_control": f"{n_outcome} exposure variable(s) classified",
             "cross_sectional": f"{n_outcome} variable(s) measured at time of assessment",
         }.get(study_type, f"{n_outcome} relevant variable(s)")
+    elif item.item_id == "17":
+        n_post_hoc = sum(1 for a in analyses if not a["is_pre_registered"])
+        if n_post_hoc > 0:
+            n_sig = sum(
+                1 for a in analyses
+                if not a["is_pre_registered"]
+                and a["p_value"] is not None
+                and a["p_value"] < 0.05
+            )
+            item.satisfied = True
+            item.evidence = (
+                f"{n_post_hoc} post-hoc/exploratory "
+                f"{'analyses' if n_post_hoc > 1 else 'analysis'} recorded, "
+                f"{n_sig} reached p<0.05"
+            )
+        else:
+            item.satisfied = True
+            item.evidence = "Template/mechanism available"
     else:
         # Items whose evidence is structural (e.g. templates, mechanisms)
         # fall through here.  They are still satisfied.
