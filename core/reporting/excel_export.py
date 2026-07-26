@@ -406,17 +406,39 @@ def _build_tab3_analyses(wb, study_id, analyses):
         for t in plan_data.get("post_hoc_tests", []):
             var_map[t.get("test_name", "")] = t.get("variable_name", "")
 
+    # Pre-fetch covariate results
+    conn = get_connection(study_id)
+    covariate_map: dict[int, list[dict]] = {}
+    result_ids = [a["id"] for a in analyses]
+    if result_ids:
+        placeholders = ",".join("?" for _ in result_ids)
+        cur = conn.execute(
+            f"SELECT * FROM analysis_covariate_results WHERE result_id IN ({placeholders}) ORDER BY id",
+            result_ids,
+        )
+        for row in cur.fetchall():
+            covariate_map.setdefault(row["result_id"], []).append({
+                "covariate": row["covariate"],
+                "hr": row["hr"],
+                "ci_lower": row["ci_lower"],
+                "ci_upper": row["ci_upper"],
+                "wald_p": row["wald_p"],
+            })
+    conn.close()
+
     headers = [
         "Analysis ID", "Test Name", "Comparison", "Variable",
         "N Analyzed", "Statistic", "P-Value", "Adj. P-Value",
-        "95% CI (Lower)", "95% CI (Upper)", "Status", "Pre-Registered",
+        "95% CI (Lower)", "95% CI (Upper)",
+        "LR Test P", "Concordance",
+        "Status", "Pre-Registered",
     ]
     for ci, h in enumerate(headers, 1):
         ws.cell(row=1, column=ci, value=h)
     _style_header_row(ws, 1, len(headers))
 
-    for ri, a in enumerate(analyses):
-        r = ri + 2
+    r = 2
+    for a in analyses:
         status_data = json.loads(a["status_json"]) if a["status_json"] else {}
         status = status_data.get("status", "completed")
         sc = json.loads(a["sample_counts_json"]) if a["sample_counts_json"] else {}
@@ -429,6 +451,8 @@ def _build_tab3_analyses(wb, study_id, analyses):
             comparison = f"{v_clean} by Treatment Arm"
         ci_lower_str = f"{a['ci_lower']:.4f}" if a["ci_lower"] is not None else "N/A"
         ci_upper_str = f"{a['ci_upper']:.4f}" if a["ci_upper"] is not None else "N/A"
+        lr_p_str = f"{a['lr_test_p']:.4f}" if "lr_test_p" in a and a["lr_test_p"] is not None else ""
+        c_index_str = f"{a['concordance_index']:.3f}" if "concordance_index" in a and a["concordance_index"] is not None else ""
         vals = [
             a["id"],
             test_name,
@@ -440,14 +464,33 @@ def _build_tab3_analyses(wb, study_id, analyses):
             f"{a['adjusted_p_value']:.4f}" if a["adjusted_p_value"] is not None else "",
             ci_lower_str,
             ci_upper_str,
+            lr_p_str,
+            c_index_str,
             status,
             "YES" if a["is_pre_registered"] else "NO  [POST-HOC]",
         ]
         for ci, v in enumerate(vals, 1):
             ws.cell(row=r, column=ci, value=v).font = BODY_FONT
             ws.cell(row=r, column=ci).border = THIN_BORDER
+        r += 1
 
-    _apply_zebra(ws, 2, len(analyses) + 1, len(headers))
+        # Per-covariate sub-rows for Cox PH
+        cov_rows = covariate_map.get(a["id"], [])
+        if cov_rows:
+            cov_headers = ["", "Covariate", "HR", "CI Lower", "CI Upper", "P-Value"]
+            cov_start = r
+            for ci, h in enumerate(cov_headers, 1):
+                ws.cell(row=r, column=ci, value=h).font = Font(name="Calibri", italic=True, size=10, color="555555")
+            r += 1
+            for cr in cov_rows:
+                ws.cell(row=r, column=2, value=cr["covariate"]).font = BODY_FONT
+                ws.cell(row=r, column=3, value=f"{cr['hr']:.4f}" if cr.get("hr") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=4, value=f"{cr['ci_lower']:.4f}" if cr.get("ci_lower") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=5, value=f"{cr['ci_upper']:.4f}" if cr.get("ci_upper") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=6, value=f"{cr['wald_p']:.4f}" if cr.get("wald_p") is not None else "").font = BODY_FONT
+                r += 1
+
+    _apply_zebra(ws, 2, r - 1, len(headers))
 
 
 # ── Tab 4: Audit & Hash Manifest ────────────────────────────────────────

@@ -68,6 +68,7 @@ def run_test(
     time_col: Optional[str] = None,
     event_col: Optional[str] = None,
     covariates: Optional[list[str]] = None,
+    **kwargs,
 ) -> dict:
     """Dispatch to the appropriate test function.
 
@@ -93,6 +94,10 @@ def run_test(
         return _kaplan_meier_logrank(data, time_col, event_col, group_col)
     elif test_name == "cox_proportional_hazards":
         return _cox_ph(data, time_col, event_col, group_col, covariates or [])
+    elif test_name == "cox_ph_model":
+        var_types = kwargs.get("var_types", {})
+        return _cox_ph_model(data, time_col, event_col, group_col, covariates or [],
+                             var_types=var_types)
     else:
         return _uro(test_name=test_name, n_analyzed=len(data),
                      params={"error": f"Unknown test: {test_name}"})
@@ -273,6 +278,7 @@ def _kaplan_meier_logrank(data: pd.DataFrame, time_col: str, event_col: str,
 
 def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
             group_col: str, covariates: list[str]) -> dict:
+    """Legacy univariate Cox PH (for backward compatibility with test suite)."""
     from lifelines import CoxPHFitter
 
     if not event_col or event_col not in data.columns:
@@ -295,7 +301,7 @@ def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
         )
 
     cph = CoxPHFitter()
-    cph.fit(df, duration_col=time_col, event_col=event_col, step_size=0.1)
+    cph.fit(df, duration_col=time_col, event_col=event_col)
     hr = cph.hazard_ratios_.get(group_col, None)
     ci = cph.confidence_intervals_.loc[group_col] if group_col in cph.confidence_intervals_.index else None
     p = cph.summary.loc[group_col, "p"] if group_col in cph.summary.index else None
@@ -322,12 +328,166 @@ def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
         test_name="cox_proportional_hazards",
         statistic=float(hr) if hr is not None else None,
         p_value=float(p) if p is not None else None,
-        ci_lower=float(ci[ci.index[0]]) if ci is not None else None,
-        ci_upper=float(ci[ci.index[1]]) if ci is not None else None,
+        ci_lower=np.exp(float(ci.iloc[0])) if ci is not None else None,
+        ci_upper=np.exp(float(ci.iloc[1])) if ci is not None else None,
         n_analyzed=len(df),
         effect_size={
             "metric": "Hazard Ratio",
             "value": float(hr),
         } if hr is not None else None,
         params={"covariates": covariates, "assumption_diagnostics": diagnostics},
+    )
+
+
+def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
+                  group_col: str, covariates: list[str],
+                  var_types: dict[str, str] | None = None) -> dict:
+    """Multivariable Cox PH model returning per-covariate HRs, CIs, and overall model stats.
+
+    Uses lifelines' formula API to properly handle categorical variables.
+
+    Parameters
+    ----------
+    var_types : dict[str, str] | None
+        Map of column_name → data_type ('continuous', 'categorical', etc.)
+        from the tool's variable classifier.  When None, falls back to
+        pandas dtype check (brittle for TEXT-stored data).
+    """
+    from lifelines import CoxPHFitter
+
+    if not event_col or event_col not in data.columns:
+        raise ValueError(
+            f"Cannot run cox_ph_model on '{time_col}': "
+            f"no linked event/censoring column found. "
+            f"A time-to-event variable requires both a duration column "
+            f"and an event indicator column."
+        )
+
+    # All columns needed: time, event, primary treatment, covariates
+    all_cols = [time_col, event_col, group_col] + covariates
+    df = data[all_cols].copy()
+
+    # Determine numeric vs categorical from classifier, not raw SQLite dtype
+    var_types = var_types or {}
+    numeric_cols = [time_col, event_col]
+    for c in covariates:
+        dtype = var_types.get(c)
+        if dtype == "continuous" or (dtype is None and data[c].dtype != 'object'):
+            numeric_cols.append(c)
+    for c in numeric_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    
+    # Keep group_col as-is (could be categorical)
+    df = df.dropna()
+
+    if df.empty:
+        return _uro(
+            test_name="cox_ph_model", n_analyzed=0,
+            params={"error": "No valid data after dropping NAs"},
+        )
+
+    # Build formula: group_col + covariates
+    formula_terms = [group_col] + covariates
+    formula = " + ".join(formula_terms)
+
+    cph = CoxPHFitter()
+    cph.fit(df, duration_col=time_col, event_col=event_col, formula=formula)
+
+    # --- Primary treatment effect (backward compat) ---
+    hr = None
+    ci = None
+    p = None
+
+    # Find the coefficient for the primary treatment variable
+    for cov in cph.summary.index:
+        if cov.startswith(group_col) or cov == group_col:
+            hr = cph.hazard_ratios_.get(cov, None)
+            if cov in cph.confidence_intervals_.index:
+                ci = cph.confidence_intervals_.loc[cov]
+            p = cph.summary.loc[cov, "p"]
+            break
+
+    # --- Per-covariate results ---
+    covariate_results = []
+    for cov in [group_col] + covariates:
+        # Handle categorical encoding (e.g., treatment_arm[T.B])
+        matching_idx = [idx for idx in cph.summary.index if idx.startswith(cov) or idx == cov]
+        if matching_idx:
+            idx = matching_idx[0]
+            row = cph.summary.loc[idx]
+            cov_hr = cph.hazard_ratios_.get(idx, None)
+            cov_ci = cph.confidence_intervals_.loc[idx] if idx in cph.confidence_intervals_.index else None
+            covariate_results.append({
+                "covariate": cov,
+                "hr": float(cov_hr) if cov_hr is not None else None,
+                "ci_lower": np.exp(float(cov_ci.iloc[0])) if cov_ci is not None else None,
+                "ci_upper": np.exp(float(cov_ci.iloc[1])) if cov_ci is not None else None,
+                "wald_p": float(row["p"]) if "p" in row else None,
+                "coef": float(row["coef"]) if "coef" in row else None,
+                "se": float(row["se"]) if "se" in row else None,
+                "z": float(row["z"]) if "z" in row else None,
+            })
+
+    # --- Overall model statistics ---
+    lr_test_p = None
+    try:
+        lr_test = cph.log_likelihood_ratio_test()
+        lr_test_p = float(lr_test[1]) if lr_test else None
+    except Exception:
+        lr_test_p = None
+
+    concordance = float(cph.concordance_index_) if hasattr(cph, "concordance_index_") and cph.concordance_index_ else None
+
+    # --- Proportional hazards diagnostics (Schoenfeld residuals) ---
+    diagnostics = None
+    try:
+        from lifelines.statistics import proportional_hazard_test
+        results = proportional_hazard_test(cph, df, time_transform="km")
+        diag_rows = []
+        for cov_name in results.summary.index:
+            row = results.summary.loc[cov_name]
+            diag_rows.append({
+                "covariate": str(cov_name),
+                "test_statistic": float(row.get("test_statistic", 0)),
+                "p_value": float(row.get("p", 1.0)),
+            })
+        # Flag any violations
+        violations = [r for r in diag_rows if r["p_value"] < 0.05]
+        if violations:
+            diag_rows.append({
+                "warning": f"PH assumption violated for {len(violations)} covariate(s) (p<0.05). "
+                          f"Consider time-varying coefficients or stratification for: "
+                          f"{', '.join(v['covariate'] for v in violations)}"
+            })
+        diagnostics = {"test": "Schoenfeld residuals", "covariates": diag_rows}
+    except Exception as e:
+        diagnostics = {"test": "Schoenfeld residuals", "error": f"Could not compute: {e}"}
+
+    # --- Missing data handling ---
+    n_total = len(data)
+    n_analyzed = len(df)
+    n_excluded = n_total - n_analyzed
+
+    return _uro(
+        test_name="cox_ph_model",
+        statistic=float(hr) if hr is not None else None,
+        p_value=float(p) if p is not None else None,
+        ci_lower=np.exp(float(ci.iloc[0])) if ci is not None else None,
+        ci_upper=np.exp(float(ci.iloc[1])) if ci is not None else None,
+        n_analyzed=n_analyzed,
+        n_total=n_total,
+        effect_size={
+            "metric": "Hazard Ratio (primary treatment)",
+            "value": float(hr),
+        } if hr is not None else None,
+        params={
+            "covariates": covariates,
+            "formula": formula,
+            "per_covariate_results": covariate_results,
+            "lr_test_p_value": lr_test_p,
+            "concordance_index": concordance,
+            "assumption_diagnostics": diagnostics,
+            "missing_data": {"n_total": n_total, "n_analyzed": n_analyzed, "n_excluded": n_excluded},
+        },
     )

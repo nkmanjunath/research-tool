@@ -18,6 +18,17 @@ class PlannedTest:
 
 
 @dataclass
+class CoxPHModel:
+    """Multivariable Cox Proportional Hazards model declaration."""
+    model_name: str
+    survival_time_col: str
+    event_col: str
+    primary_treatment_col: str
+    covariate_cols: list[str]
+    rationale: str = ""
+
+
+@dataclass
 class StudyPlan:
     study_id: str
     version: int = 1
@@ -33,6 +44,7 @@ class StudyPlan:
     audit: dict = field(default_factory=dict)
     post_hoc_tests: list[dict] = field(default_factory=list)
     amendment_reason: str = ""
+    cox_ph_models: list[CoxPHModel] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -47,5 +59,10 @@ class StudyPlan:
         d.setdefault("matching_criteria", [])
         d.setdefault("post_hoc_tests", [])
         d.setdefault("amendment_reason", "")
+        d.setdefault("cox_ph_models", [])
+        d.pop("content_hash", None)  # lock file artifact, not a model field
         d["role_overrides"] = {int(k): v for k, v in d["role_overrides"].items()}
+        # Convert cox_ph_models dicts to CoxPHModel objects
+        if "cox_ph_models" in d and d["cox_ph_models"]:
+            d["cox_ph_models"] = [CoxPHModel(**m) if isinstance(m, dict) else m for m in d["cox_ph_models"]]
         return StudyPlan(**d)

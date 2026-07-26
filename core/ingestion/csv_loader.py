@@ -1,11 +1,12 @@
 """Load CSV/Excel into a dynamic per-study raw data table."""
 
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from core.database import get_connection, init_db
+from core.database import DATA_ROOT, get_connection, init_db
 
 
 def _sanitize_col(name: str) -> str:
@@ -23,7 +24,72 @@ def infer_dtype(series: pd.Series) -> str:
     return "continuous"
 
 
-def load_file(study_id: str, filepath: str, na_values: list[str] | None = None) -> list[str]:
+def _check_reingest(study_id: str) -> None:
+    """Check if study already has ingested data. Raises SystemExit if so."""
+    conn = get_connection(study_id)
+    init_db(conn)
+
+    # Check if raw_ table exists and has rows
+    raw = f"raw_{study_id}"
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (raw,),
+    )
+    if cur.fetchone() is None:
+        conn.close()
+        return  # no raw table → clean
+
+    cur = conn.execute(f"SELECT COUNT(*) AS cnt FROM {raw}")
+    row_count = cur.fetchone()["cnt"]
+
+    cur = conn.execute(
+        "SELECT COUNT(*) AS cnt FROM variables WHERE study_id=?",
+        (study_id,),
+    )
+    var_count = cur.fetchone()["cnt"]
+
+    # Check for locked plan files on disk
+    locked_plans = list(DATA_ROOT.glob(f"{study_id}/study_plan.v*.locked.json"))
+    conn.close()
+
+    if row_count > 0 or var_count > 0 or locked_plans:
+        parts = []
+        if row_count > 0:
+            parts.append(f"{row_count} row(s) in raw table")
+        if var_count > 0:
+            parts.append(f"{var_count} classified variable(s)")
+        if locked_plans:
+            parts.append(f"{len(locked_plans)} locked plan(s)")
+        msg = (
+            f"Study '{study_id}' already has ingested data ({'; '.join(parts)}). "
+            f"Re-ingesting would invalidate existing variables/plan/results. "
+            f"Use 'new-study' to start fresh, or pass --force-reingest if "
+            f"this is intentional (clears all downstream state)."
+        )
+        print(msg, file=sys.stderr)
+        sys.exit(1)
+
+
+def _cascade_clear(study_id: str) -> None:
+    """Drop downstream state so re-ingest can proceed cleanly."""
+    conn = get_connection(study_id)
+    init_db(conn)
+
+    masked = f"raw_masked_{study_id}"
+    conn.execute(f"DROP TABLE IF EXISTS {masked}")
+    conn.execute("DELETE FROM analysis_results WHERE study_id=?", (study_id,))
+    conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
+
+    locked_plans = list(DATA_ROOT.glob(f"{study_id}/study_plan.v*.locked.json"))
+    for p in locked_plans:
+        p.unlink()
+
+    conn.commit()
+    conn.close()
+
+
+def load_file(study_id: str, filepath: str, na_values: list[str] | None = None,
+              force: bool = False) -> list[str]:
     """Load a CSV (or Excel) file into the study's database.
 
     Creates a dynamic table named `raw_<study_id>` with one column per CSV column
@@ -37,7 +103,12 @@ def load_file(study_id: str, filepath: str, na_values: list[str] | None = None) 
     na_values : list[str], optional
         Additional strings to treat as NA/NaN during CSV parsing
         (e.g. ``["unknown", "missing"]``).  Added on top of pandas' defaults.
+    force : bool
+        If True, clear downstream state before re-ingesting.
     """
+    if not force:
+        _check_reingest(study_id)
+
     path = Path(filepath)
     if path.suffix in (".xls", ".xlsx"):
         df = pd.read_excel(str(path))
@@ -49,6 +120,9 @@ def load_file(study_id: str, filepath: str, na_values: list[str] | None = None) 
 
     conn = get_connection(study_id)
     init_db(conn)
+
+    if force:
+        _cascade_clear(study_id)
 
     # Strip leading/trailing whitespace from string columns
     str_cols = df.select_dtypes(include="object").columns

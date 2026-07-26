@@ -222,3 +222,86 @@ def test_na_values_default_behavior_unchanged():
     conn.close()
     # 'unknown' should remain as the string 'unknown'
     assert arms == ["A", "unknown", "B"]
+
+
+# --- re-ingest guard ---
+
+
+def test_reingest_rejected_with_clear_error():
+    """Second ingest on same study_id fails with clear message, not IntegrityError."""
+    content = _csv_content([
+        ["patient_id", "age"],
+        ["P001", "45"],
+        ["P002", "50"],
+    ])
+    tmp = DATA_ROOT / STUDY_ID / "_test.csv"
+    tmp.write_text(content)
+    load_file(STUDY_ID, str(tmp))  # first ingest succeeds
+    tmp.unlink()
+
+    # second ingest must fail
+    tmp2 = DATA_ROOT / STUDY_ID / "_test2.csv"
+    tmp2.write_text(content)
+    with pytest.raises(SystemExit) as exc:
+        load_file(STUDY_ID, str(tmp2))
+    assert exc.value.code != 0  # non-zero exit
+    # original data untouched
+    conn = get_connection(STUDY_ID)
+    ages = [r["age"] for r in conn.execute("SELECT age FROM raw_test_csv_loader ORDER BY row_id").fetchall()]
+    conn.close()
+    assert ages == ["45", "50"]
+    tmp2.unlink()
+
+
+def test_reingest_with_force_clears_and_reingests():
+    """--force-reingest clears downstream state and re-ingests."""
+    content = _csv_content([
+        ["patient_id", "age"],
+        ["P001", "45"],
+        ["P002", "50"],
+    ])
+    tmp = DATA_ROOT / STUDY_ID / "_test.csv"
+    tmp.write_text(content)
+    load_file(STUDY_ID, str(tmp))  # first ingest
+    tmp.unlink()
+
+    # seal outcomes so shadow table exists
+    from core.masking.gate import seal_outcomes
+    seal_outcomes(STUDY_ID)
+
+    # classify a variable so variables table has a row
+    conn = get_connection(STUDY_ID)
+    conn.execute(
+        "INSERT OR REPLACE INTO variables (id, study_id, column_name, role, data_type) "
+        "VALUES (1, ?, 'age', 'baseline', 'continuous')",
+        (STUDY_ID,),
+    )
+    conn.commit()
+    conn.close()
+
+    # force-reingest
+    content2 = _csv_content([
+        ["patient_id", "age", "sex"],  # new column
+        ["P003", "30", "M"],
+        ["P004", "40", "F"],
+    ])
+    tmp2 = DATA_ROOT / STUDY_ID / "_test2.csv"
+    tmp2.write_text(content2)
+    cols = load_file(STUDY_ID, str(tmp2), force=True)
+    tmp2.unlink()
+
+    # downstream state cleared — new data in place
+    assert cols == ["patient_id", "age", "sex"]
+    conn = get_connection(STUDY_ID)
+    cur = conn.execute("SELECT age, sex FROM raw_test_csv_loader ORDER BY row_id")
+    rows = cur.fetchall()
+    conn.close()
+    assert len(rows) == 2
+    assert rows[0]["age"] == "30"
+    assert rows[0]["sex"] == "M"
+
+    # variables table was cleared
+    conn = get_connection(STUDY_ID)
+    cur = conn.execute("SELECT COUNT(*) AS cnt FROM variables WHERE study_id=?", (STUDY_ID,))
+    assert cur.fetchone()["cnt"] == 0
+    conn.close()

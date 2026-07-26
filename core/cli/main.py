@@ -10,6 +10,7 @@ Commands (Phase 1):
 from __future__ import annotations
 import argparse
 import json
+import math
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -25,6 +26,13 @@ from core.stats.descriptive import generate_table1
 from core.stats.inferential import run_test
 from core.reporting.strobe_checklist import generate_report
 from core.reporting.manuscript_draft import write_draft
+
+
+def _model_field(model, key: str, default=""):
+    """Read field from dict or dataclass."""
+    if isinstance(model, dict):
+        return model.get(key, default)
+    return getattr(model, key, default)
 
 
 def cmd_new_study(args: argparse.Namespace) -> None:
@@ -48,7 +56,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     if getattr(args, "na_values", None):
         na_vals = [v.strip() for v in args.na_values.split(",")]
         print(f"Treating values as missing: {na_vals}")
-    columns = load_file(args.study_id, args.file, na_values=na_vals)
+    force = getattr(args, "force_reingest", False)
+    columns = load_file(args.study_id, args.file, na_values=na_vals, force=force)
     print(f"Ingested {len(columns)} columns: {', '.join(columns)}")
 
 
@@ -115,6 +124,37 @@ def cmd_plan(args: argparse.Namespace) -> None:
             })
     covariates = [int(x) for x in args.covariates.split(",")] if args.covariates else []
     matching_criteria = [int(x) for x in args.matching_criteria.split(",")] if getattr(args, "matching_criteria", None) else []
+
+    # Parse Cox PH models
+    cox_ph_models = []
+    if getattr(args, "cox_ph_models", None):
+        for m in args.cox_ph_models:
+            # Format: model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]
+            parts = m.split(":")
+            if len(parts) < 4:
+                print(f"Error: invalid Cox PH model format '{m}'. Use model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]", file=sys.stderr)
+                sys.exit(1)
+            model_name = parts[0]
+            survival_time_col = parts[1]
+            event_col = parts[2]
+            primary_treatment_col = parts[3]
+            if len(parts) >= 6:
+                covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
+                rationale = parts[5]
+            elif len(parts) == 5:
+                covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
+                rationale = ""
+            else:
+                covariate_cols = []
+                rationale = ""
+            cox_ph_models.append({
+                "model_name": model_name,
+                "survival_time_col": survival_time_col,
+                "event_col": event_col,
+                "primary_treatment_col": primary_treatment_col,
+                "covariate_cols": covariate_cols,
+                "rationale": rationale,
+            })
 
     # Role overrides are plan metadata. They do not modify the ingested rows
     # or erase the classifier's original suggestion.
@@ -200,14 +240,97 @@ def cmd_plan(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    # Validate Cox PH model columns exist and are classified correctly
+    if cox_ph_models:
+        conn = get_connection(args.study_id)
+        cur = conn.execute(
+            "SELECT column_name, role, data_type FROM variables WHERE study_id=?",
+            (args.study_id,),
+        )
+        var_catalog = {r["column_name"]: {"role": r["role"], "data_type": r["data_type"]} for r in cur.fetchall()}
+        conn.close()
+
+        for model in cox_ph_models:
+            model_name = model["model_name"]
+            survival_time_col = model["survival_time_col"]
+            event_col = model["event_col"]
+            primary_treatment_col = model["primary_treatment_col"]
+            covariate_cols = model["covariate_cols"]
+
+            # Check survival_time_col
+            if survival_time_col not in var_catalog:
+                print(f"Error: Cox PH model '{model_name}': survival_time_col '{survival_time_col}' not found among classified variables.", file=sys.stderr)
+                sys.exit(1)
+            if var_catalog[survival_time_col]["data_type"] != "time_to_event":
+                print(f"Error: Cox PH model '{model_name}': survival_time_col '{survival_time_col}' is not classified as time_to_event (got {var_catalog[survival_time_col]['data_type']}).", file=sys.stderr)
+                sys.exit(1)
+
+            # Check event_col
+            if event_col not in var_catalog:
+                print(f"Error: Cox PH model '{model_name}': event_col '{event_col}' not found among classified variables.", file=sys.stderr)
+                sys.exit(1)
+            if var_catalog[event_col]["role"] != "outcome":
+                print(f"Error: Cox PH model '{model_name}': event_col '{event_col}' must be classified as outcome.", file=sys.stderr)
+                sys.exit(1)
+
+            # Check primary_treatment_col
+            if primary_treatment_col not in var_catalog:
+                print(f"Error: Cox PH model '{model_name}': primary_treatment_col '{primary_treatment_col}' not found among classified variables.", file=sys.stderr)
+                sys.exit(1)
+
+            # Check covariate_cols
+            for cov in covariate_cols:
+                if cov not in var_catalog:
+                    print(f"Error: Cox PH model '{model_name}': covariate '{cov}' not found among classified variables.", file=sys.stderr)
+                    sys.exit(1)
+
+            # Validate event_col is binary (0/1)
+            conn2 = get_connection(args.study_id)
+            raw_table = f"raw_{args.study_id}"
+            cur2 = conn2.execute(f'SELECT DISTINCT "{event_col}" AS val FROM {raw_table} WHERE "{event_col}" IS NOT NULL')
+            event_vals = [str(r["val"]) for r in cur2.fetchall() if r["val"] is not None and str(r["val"]).strip() != ""]
+            non_binary = [v for v in event_vals if v not in ("0", "1")]
+            if non_binary:
+                print(f"Error: Cox PH model '{model_name}': event_col '{event_col}' must be binary (0/1), found values: {non_binary}", file=sys.stderr)
+                conn2.close()
+                sys.exit(1)
+            # Validate survival_time_col is numeric and non-negative
+            cur2 = conn2.execute(f'SELECT "{survival_time_col}" AS val FROM {raw_table} WHERE "{survival_time_col}" IS NOT NULL')
+            for r in cur2.fetchall():
+                v = r["val"]
+                if v is None or str(v).strip() == "":
+                    continue
+                try:
+                    fv = float(v)
+                    if not math.isfinite(fv):
+                        print(f"Error: Cox PH model '{model_name}': survival_time_col '{survival_time_col}' has non-finite value '{v}'", file=sys.stderr)
+                        conn2.close()
+                        sys.exit(1)
+                    if fv < 0:
+                        print(f"Error: Cox PH model '{model_name}': survival_time_col '{survival_time_col}' has negative value ({v})", file=sys.stderr)
+                        conn2.close()
+                        sys.exit(1)
+                except (ValueError, TypeError):
+                    print(f"Error: Cox PH model '{model_name}': survival_time_col '{survival_time_col}' is not numeric (found '{v}')", file=sys.stderr)
+                    conn2.close()
+                    sys.exit(1)
+            conn2.close()
+
     # Check assumptions before building plan
     # Enrich tests with covariate count for Cox EPV check
     n_covariates = len(covariates)
     for t in tests:
         t["n_covariates"] = n_covariates
 
-    warnings = check_assumptions(args.study_id, tests)
-    for w in warnings:
+    # Collect all warnings including Cox PH model warnings
+    all_warnings = check_assumptions(args.study_id, tests)
+
+    # Add Cox PH model warnings
+    from core.planning.test_selector import check_cox_ph_model_assumptions
+    cox_model_warnings = check_cox_ph_model_assumptions(args.study_id, cox_ph_models)
+    all_warnings.extend(cox_model_warnings)
+
+    for w in all_warnings:
         print(w, file=sys.stderr)
 
     # Warn if a matching criterion overlaps the comparison variable
@@ -230,9 +353,16 @@ def cmd_plan(args: argparse.Namespace) -> None:
     for test in tests:
         tn = test.get("test_name", "")
         var = test.get("variable_name", "")
-        for w in warnings:
+        for w in all_warnings:
             if f"{tn} on '{var}'" in w:
                 warning_map[var] = w
+
+    # Also map Cox PH model warnings
+    for model in cox_ph_models:
+        model_name = model["model_name"]
+        for w in cox_model_warnings:
+            if model_name in w:
+                warning_map[f"cox_ph_model:{model_name}"] = w
 
     plan = StudyPlan(
         study_id=args.study_id,
@@ -245,6 +375,7 @@ def cmd_plan(args: argparse.Namespace) -> None:
         warnings=warning_map,
         role_overrides=overrides,
         audit={"role_overrides": override_audit},
+        cox_ph_models=cox_ph_models,
     )
 
     # Write provisional plan
@@ -390,6 +521,10 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     test_list = plan.post_hoc_tests if is_post_hoc else plan.planned_tests
     is_pre_registered = 0 if is_post_hoc else 1
 
+    # Enforce assumption warnings from plan time
+    plan_warnings = getattr(plan, "warnings", {})
+
+    # Run standard planned tests
     for t in test_list:
         var_name = t.get("variable_name", "")
         test_name = t.get("test_name", "")
@@ -443,9 +578,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                         break
                 if ph_reason:
                     break
-
-        # Enforce assumption warnings from plan time
-        plan_warnings = getattr(plan, "warnings", {})
         if var_name in plan_warnings and not force:
             # Suggest the appropriate alternative based on test type
             alt_test = {"chi_square": "fisher_exact",
@@ -503,6 +635,103 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             result["reason"] = result["params"]["error"]
         results.append(result)
 
+    # Run Cox PH models if declared in the plan
+    cox_ph_models = getattr(plan, "cox_ph_models", [])
+    if cox_ph_models:
+        # Determine if we're running pre-registered or post-hoc models
+        model_list = cox_ph_models
+        model_is_pre_registered = 0 if is_post_hoc else 1
+
+        for model in model_list:
+            model_name = _model_field(model, "model_name")
+            survival_time_col = _model_field(model, "survival_time_col")
+            event_col = _model_field(model, "event_col")
+            primary_treatment_col = _model_field(model, "primary_treatment_col")
+            covariate_cols = _model_field(model, "covariate_cols", [])
+            model_rationale = _model_field(model, "rationale")
+
+            if not model_name or not survival_time_col:
+                continue
+
+            # Check for assumption warnings
+            warning_key = f"cox_ph_model:{model_name}"
+            if warning_key in plan_warnings and not force:
+                print(
+                    f"Skipping Cox PH model '{model_name}' — "
+                    f"plan time warning recorded:\n"
+                    f"  {plan_warnings[warning_key]}\n"
+                    f"Use '--force' to run despite warnings.",
+                    file=sys.stderr,
+                )
+                skipped_uro = {
+                    "test_name": "cox_ph_model",
+                    "statistic": None,
+                    "p_value": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "params": {},
+                    "effect_size": None,
+                    "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
+                    "status": "skipped_assumption_violation",
+                    "reason": plan_warnings[warning_key],
+                    "rationale": model_rationale,
+                    "amendment_reason": "",
+                    "declaring_version": plan.version,
+                }
+                results.append(skipped_uro)
+                continue
+
+            # Dedup check
+            if not rerun:
+                existing = conn.execute(
+                    """SELECT id, computed_at FROM analysis_results
+                       WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                             study_plan_version=? AND is_pre_registered=?
+                             AND json_extract(status_json, '$.status') = 'completed'
+                             AND superseded_previous_result_id IS NULL
+                       ORDER BY id DESC LIMIT 1""",
+                    (args.study_id, "cox_ph_model", json.dumps([]),
+                     plan.version, model_is_pre_registered),
+                ).fetchone()
+                if existing:
+                    print(
+                        f"Cox PH model '{model_name}' already completed "
+                        f"under plan v{plan.version} (result id {existing['id']}, "
+                        f"computed {existing['computed_at']}). "
+                        f"Skipping — use --rerun to force recomputation."
+                    )
+                    continue
+
+            # Look up variable types from classifier
+            cur3 = conn.execute(
+                "SELECT column_name, data_type FROM variables WHERE study_id=?",
+                (args.study_id,),
+            )
+            var_types = {r["column_name"]: r["data_type"] for r in cur3.fetchall()}
+
+            # Run the multivariable Cox PH model
+            result = run_test(
+                "cox_ph_model",
+                df,
+                outcome_col=survival_time_col,
+                group_col=primary_treatment_col,
+                time_col=survival_time_col,
+                event_col=event_col,
+                covariates=covariate_cols,
+                var_types=var_types,
+            )
+            result["status"] = "completed"
+            result["reason"] = None
+            result["rationale"] = model_rationale
+            result["variable_name"] = model_name
+            result["test_name"] = "cox_ph_model"
+            result["amendment_reason"] = ""
+            result["declaring_version"] = plan.version
+            if result.get("params", {}).get("error"):
+                result["status"] = "error"
+                result["reason"] = result["params"]["error"]
+            results.append(result)
+
     # Apply multiple-testing correction to completed tests only
     completed = [r for r in results if r["status"] == "completed"]
     completed_p = [r["p_value"] for r in completed if r["p_value"] is not None]
@@ -535,6 +764,21 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             if existing:
                 supersede_map[test_name] = existing["id"]
 
+        # Also check for Cox PH models
+        if cox_ph_models:
+            existing = conn.execute(
+                """SELECT id FROM analysis_results
+                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                         study_plan_version=? AND is_pre_registered=?
+                         AND json_extract(status_json, '$.status') = 'completed'
+                         AND superseded_previous_result_id IS NULL
+                   ORDER BY id DESC LIMIT 1""",
+                (args.study_id, "cox_ph_model", json.dumps([]),
+                 plan.version, model_is_pre_registered),
+            ).fetchone()
+            if existing:
+                supersede_map["cox_ph_model"] = existing["id"]
+
     now = datetime.now(timezone.utc).isoformat()
     for r in results:
         status_record = {"status": r.get("status", "completed")}
@@ -550,14 +794,19 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             if ph_reason:
                 prov["amendment_reason"] = ph_reason
         superseded_id = supersede_map.get(r.get("test_name", ""))
-        conn.execute(
+        params = r.get("params", {})
+        lr_test_p = params.get("lr_test_p_value") if params else None
+        concordance = params.get("concordance_index") if params else None
+        ph_diag = params.get("assumption_diagnostics") if params else None
+        cursor = conn.execute(
             """INSERT INTO analysis_results
                (study_id, study_plan_version, variable_ids_used, test_name,
                 statistic, p_value, adjusted_p_value, ci_lower, ci_upper,
                 effect_size_json, sample_counts_json, status_json,
                 is_pre_registered, provenance_json, computed_at,
-                superseded_previous_result_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                superseded_previous_result_id,
+                lr_test_p, concordance_index, ph_diagnostics_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (args.study_id, stored_version, json.dumps([]),
              r["test_name"], r["statistic"], r["p_value"],
              r.get("adjusted_p_value"), r.get("ci_lower"), r.get("ci_upper"),
@@ -566,8 +815,27 @@ def cmd_analyze(args: argparse.Namespace) -> None:
              json.dumps(status_record),
              is_pre_registered,
              json.dumps(prov), now,
-             superseded_id),
+             superseded_id,
+             lr_test_p, concordance,
+             json.dumps(ph_diag) if ph_diag else None),
         )
+        result_id = cursor.lastrowid
+
+        # Insert per-covariate results for Cox PH models
+        if r.get("test_name") == "cox_ph_model" and params:
+            cov_results = params.get("per_covariate_results", [])
+            for cr in cov_results:
+                conn.execute(
+                    """INSERT INTO analysis_covariate_results
+                       (result_id, covariate, hr, ci_lower, ci_upper,
+                        wald_p, coef, se, z)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (result_id,
+                     cr.get("covariate"), cr.get("hr"),
+                     cr.get("ci_lower"), cr.get("ci_upper"),
+                     cr.get("wald_p"), cr.get("coef"),
+                     cr.get("se"), cr.get("z")),
+                )
     conn.commit()
     conn.close()
 
@@ -875,6 +1143,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--na-values",
                     help="Comma-separated strings to treat as missing (e.g. 'unknown,missing,N/A,?'). "
                          "Added on top of pandas' default NA representations.")
+    sp.add_argument("--force-reingest", action="store_true",
+                    help="Re-ingest even if study already has data (clears variables, plans, results).")
     sp.set_defaults(func=cmd_ingest)
 
     # classify-variables
@@ -897,6 +1167,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--outcome-var-ids", required=True, help="Comma-separated variable IDs of primary outcomes")
     sp.add_argument("--test", action="append", dest="tests", help="Planned test in format 'var_id:test_name:rationale'")
     sp.add_argument("--covariates", help="Comma-separated variable IDs for covariates")
+    sp.add_argument("--cox-ph-models", action="append", dest="cox_ph_models",
+                    help="Multivariable Cox PH model in format 'model_name:survival_time_col:event_col:primary_treatment_col:covariate_col1,covariate_col2,...:rationale'")
     sp.add_argument("--matching-criteria", help="Comma-separated variable IDs used for matching (case-control studies)")
     sp.add_argument("--override", action="append", dest="overrides", default=[],
                     help="Override a classified role before lock: id=<variable_id>:role=<role>")

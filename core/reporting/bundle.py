@@ -71,6 +71,19 @@ def _export_analysis_results(study_id: str) -> str:
         "SELECT * FROM analysis_results WHERE study_id=? ORDER BY id", (study_id,)
     )
     rows = cur.fetchall()
+
+    # Pre-fetch covariate results
+    result_ids = [r["id"] for r in rows]
+    covariate_map: dict[int, list[dict]] = {}
+    if result_ids:
+        placeholders = ",".join("?" for _ in result_ids)
+        cur = conn.execute(
+            f"SELECT * FROM analysis_covariate_results WHERE result_id IN ({placeholders}) ORDER BY id",
+            result_ids,
+        )
+        for row in cur.fetchall():
+            covariate_map.setdefault(row["result_id"], []).append(dict(row))
+
     conn.close()
 
     results = []
@@ -78,12 +91,17 @@ def _export_analysis_results(study_id: str) -> str:
         row_dict = dict(r)
         # Decode JSON fields so they're proper objects, not strings
         for json_field in ("variable_ids_used", "effect_size_json",
-                          "sample_counts_json", "status_json", "provenance_json"):
+                          "sample_counts_json", "status_json", "provenance_json",
+                          "ph_diagnostics_json"):
             if row_dict.get(json_field):
                 try:
                     row_dict[json_field] = json.loads(row_dict[json_field])
                 except (TypeError, json.JSONDecodeError):
                     pass
+        # Attach per-covariate results
+        cr = covariate_map.get(r["id"])
+        if cr:
+            row_dict["covariate_results"] = cr
         results.append(row_dict)
     return _canonical_json(results)
 
