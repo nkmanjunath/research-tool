@@ -10,6 +10,8 @@ URO (Unified Result Object) keys:
 """
 
 from __future__ import annotations
+import logging
+import re
 from typing import Optional
 
 import numpy as np
@@ -17,6 +19,8 @@ import pandas as pd
 from scipy import stats as sp_stats
 from scipy.stats import chi2_contingency, fisher_exact, ttest_ind, ttest_rel
 from scipy.stats import mannwhitneyu, f_oneway, kruskal
+
+logger = logging.getLogger(__name__)
 
 # Lazy-import lifelines only when needed (slow import)
 
@@ -411,13 +415,24 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
     # --- Per-covariate results ---
     covariate_results = []
     for cov in [group_col] + covariates:
-        # Handle categorical encoding (e.g., treatment_arm[T.B])
         matching_idx = [idx for idx in cph.summary.index if idx.startswith(cov) or idx == cov]
         if matching_idx:
             idx = matching_idx[0]
             row = cph.summary.loc[idx]
             cov_hr = cph.hazard_ratios_.get(idx, None)
             cov_ci = cph.confidence_intervals_.loc[idx] if idx in cph.confidence_intervals_.index else None
+
+            # Determine reference and tested levels for categorical covariates
+            ref_level = None
+            tested_level = None
+            if idx != cov:
+                m2 = re.search(r'\[T\.(.+)\]$', idx)
+                if m2:
+                    tested_level = m2.group(1)
+                    uniq = sorted(str(v) for v in data[cov].dropna().unique()) if cov in data.columns else []
+                    ref_candidates = [v for v in uniq if v != tested_level]
+                    ref_level = ref_candidates[0] if ref_candidates else None
+
             covariate_results.append({
                 "covariate": cov,
                 "hr": float(cov_hr) if cov_hr is not None else None,
@@ -427,14 +442,17 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
                 "coef": float(row["coef"]) if "coef" in row else None,
                 "se": float(row["se"]) if "se" in row else None,
                 "z": float(row["z"]) if "z" in row else None,
+                "reference_level": ref_level,
+                "tested_level": tested_level,
             })
 
     # --- Overall model statistics ---
     lr_test_p = None
     try:
         lr_test = cph.log_likelihood_ratio_test()
-        lr_test_p = float(lr_test[1]) if lr_test else None
+        lr_test_p = float(lr_test.p_value)
     except Exception:
+        logger.warning("LR test extraction failed", exc_info=True)
         lr_test_p = None
 
     concordance = float(cph.concordance_index_) if hasattr(cph, "concordance_index_") and cph.concordance_index_ else None
