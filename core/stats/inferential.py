@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats as sp_stats
 from scipy.stats import chi2_contingency, fisher_exact, ttest_ind, ttest_rel
+from lifelines.exceptions import ConvergenceError
 from scipy.stats import mannwhitneyu, f_oneway, kruskal
 
 logger = logging.getLogger(__name__)
@@ -100,8 +101,15 @@ def run_test(
         return _cox_ph(data, time_col, event_col, group_col, covariates or [])
     elif test_name == "cox_ph_model":
         var_types = kwargs.get("var_types", {})
-        return _cox_ph_model(data, time_col, event_col, group_col, covariates or [],
-                             var_types=var_types)
+        try:
+            return _cox_ph_model(data, time_col, event_col, group_col, covariates or [],
+                                 var_types=var_types)
+        except ConvergenceError as e:
+            return _uro(
+                test_name=test_name, n_analyzed=len(data),
+                params={"error": f"ConvergenceError: {e}"},
+                status="error",
+            )
     else:
         return _uro(test_name=test_name, n_analyzed=len(data),
                      params={"error": f"Unknown test: {test_name}"})

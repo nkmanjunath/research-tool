@@ -20,6 +20,21 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
+_ACRONYMS = frozenset({"PFS", "OS", "HR", "CI", "DFS", "ORR", "CR", "PR", "SD", "PD",
+                        "ISS", "ECOG", "LDH", "BMI", "IQR", "KM", "PH"})
+
+def _format_label(raw: str) -> str:
+    parts = raw.replace("_", " ").split()
+    out: list[str] = []
+    for p in parts:
+        upper = p.upper()
+        if upper in _ACRONYMS:
+            out.append(upper)
+        else:
+            out.append(p[0].upper() + p[1:] if p else p)
+    return " ".join(out)
+
+
 from core.database import get_connection, DATA_ROOT
 
 # ── Style constants ────────────────────────────────────────────────────
@@ -348,8 +363,7 @@ def _build_tab2_table1(wb, study_id):
             var_key = var_base.lower().replace(" ", "_").replace("-", "_")
             if var_key != prev_var_raw:
                 var_parts = raw_label.split(",", 1)
-                var_name = var_parts[0].replace("_", " ").title().strip()
-                var_name = var_name.replace("Iss ", "ISS ").strip()
+                var_name = _format_label(var_parts[0]).strip()
                 suffix = "," + var_parts[1] if len(var_parts) > 1 else ""
                 group_name = var_name + suffix
                 cell = ws.cell(row=data_row, column=1, value=group_name)
@@ -364,8 +378,7 @@ def _build_tab2_table1(wb, study_id):
         else:
             prev_var_raw = ""
             var_parts = raw_label.split(",", 1)
-            var_name = var_parts[0].replace("_", " ").title().strip()
-            var_name = var_name.replace("Iss ", "ISS ").strip()
+            var_name = _format_label(var_parts[0]).strip()
             suffix = "," + var_parts[1] if len(var_parts) > 1 else ""
             clean_label = var_name + suffix
             cell = ws.cell(row=data_row, column=1, value=clean_label)
@@ -447,7 +460,7 @@ def _build_tab3_analyses(wb, study_id, analyses):
         comparison = primary_comparison
         variable = var_map.get(test_name, "")
         if variable and variable != "pfs_days" and variable != "os_days":
-            v_clean = variable.replace("_", " ").title()
+            v_clean = _format_label(variable)
             comparison = f"{v_clean} by Treatment Arm"
         ci_lower_str = f"{a['ci_lower']:.4f}" if a["ci_lower"] is not None else "N/A"
         ci_upper_str = f"{a['ci_upper']:.4f}" if a["ci_upper"] is not None else "N/A"
