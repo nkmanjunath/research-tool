@@ -26,6 +26,7 @@ class CoxPHModel:
     primary_treatment_col: str
     covariate_cols: list[str]
     rationale: str = ""
+    interaction_terms: list[list[str]] = field(default_factory=list)
 
 
 @dataclass

@@ -155,7 +155,26 @@ def cmd_plan(args: argparse.Namespace) -> None:
                 "primary_treatment_col": primary_treatment_col,
                 "covariate_cols": covariate_cols,
                 "rationale": rationale,
+                "interaction_terms": [],
             })
+
+    # Parse interaction terms and attach to the named model
+    if getattr(args, "interaction_terms", None):
+        for spec in args.interaction_terms:
+            parts = spec.split(":")
+            if len(parts) != 3:
+                print(f"Error: invalid interaction term format '{spec}'. Use model_name:var_a:var_b", file=sys.stderr)
+                sys.exit(1)
+            model_name, var_a, var_b = parts
+            found = False
+            for m in cox_ph_models:
+                if m["model_name"] == model_name:
+                    m["interaction_terms"].append([var_a, var_b])
+                    found = True
+                    break
+            if not found:
+                print(f"Error: interaction term '{spec}' references model '{model_name}' which was not declared with --cox-ph-models", file=sys.stderr)
+                sys.exit(1)
 
     # Role overrides are plan metadata. They do not modify the ingested rows
     # or erase the classifier's original suggestion.
@@ -284,6 +303,13 @@ def cmd_plan(args: argparse.Namespace) -> None:
                 if cov not in var_catalog:
                     print(f"Error: Cox PH model '{model_name}': covariate '{cov}' not found among classified variables.", file=sys.stderr)
                     sys.exit(1)
+
+            # Check interaction term columns
+            for pair in model.get("interaction_terms", []):
+                for var in pair:
+                    if var not in var_catalog:
+                        print(f"Error: Cox PH model '{model_name}': interaction term variable '{var}' not found among classified variables.", file=sys.stderr)
+                        sys.exit(1)
 
             # Validate event_col is binary (0/1)
             conn2 = get_connection(args.study_id)
@@ -710,6 +736,8 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             )
             var_types = {r["column_name"]: r["data_type"] for r in cur3.fetchall()}
 
+            interaction_terms = _model_field(model, "interaction_terms", [])
+
             # Run the multivariable Cox PH model
             result = run_test(
                 "cox_ph_model",
@@ -720,6 +748,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 event_col=event_col,
                 covariates=covariate_cols,
                 var_types=var_types,
+                interaction_terms=interaction_terms,
             )
             result["status"] = "completed"
             result["reason"] = None
@@ -1217,6 +1246,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--cox-ph-models", action="append", dest="cox_ph_models",
                     help="Multivariable Cox PH model in format 'model_name:survival_time_col:event_col:primary_treatment_col:covariate_col1,covariate_col2,...:rationale'")
     sp.add_argument("--matching-criteria", help="Comma-separated variable IDs used for matching (case-control studies)")
+    sp.add_argument("--interaction-terms", action="append", dest="interaction_terms",
+                    help="Interaction term for a Cox PH model in format 'model_name:var_a:var_b'")
     sp.add_argument("--override", action="append", dest="overrides", default=[],
                     help="Override a classified role before lock: id=<variable_id>:role=<role>")
     sp.set_defaults(func=cmd_plan)

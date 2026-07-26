@@ -33,6 +33,8 @@ class CovariateRow:
     def display_label(self) -> str:
         if self.reference_level is not None and self.tested_level is not None:
             return f"{self.covariate} ({self.tested_level} vs {self.reference_level})"
+        if " (interaction)" in self.covariate:
+            return self.covariate
         return f"{self.covariate} (per 1-unit increase)"
 
 
