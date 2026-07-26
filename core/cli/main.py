@@ -1139,6 +1139,14 @@ def cmd_lineage(args: argparse.Namespace) -> None:
         print(render_text(events))
 
 
+def cmd_forensics(args: argparse.Namespace) -> None:
+    """Run anomaly-detection checks on study data."""
+    from core.reporting.forensics import run_forensics
+
+    report_path = run_forensics(args.study_id)
+    print(f"Forensics report written to {report_path}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="research-tool", description="Retrospective clinical research tool")
     sub = p.add_subparsers(dest="command")
@@ -1290,6 +1298,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--svg", type=str, default=None,
                     help="Output path for SVG file (omit for ASCII terminal output)")
     sp.set_defaults(func=cmd_lineage)
+
+    # forensics
+    sp = sub.add_parser("forensics",
+                        help="Run data anomaly-detection checks")
+    sp.add_argument("study_id")
+    sp.set_defaults(func=cmd_forensics)
 
     return p
 
