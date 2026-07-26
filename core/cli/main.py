@@ -828,13 +828,15 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 conn.execute(
                     """INSERT INTO analysis_covariate_results
                        (result_id, covariate, hr, ci_lower, ci_upper,
-                        wald_p, coef, se, z)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        wald_p, coef, se, z, reference_level, tested_level)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (result_id,
                      cr.get("covariate"), cr.get("hr"),
                      cr.get("ci_lower"), cr.get("ci_upper"),
                      cr.get("wald_p"), cr.get("coef"),
-                     cr.get("se"), cr.get("z")),
+                     cr.get("se"), cr.get("z"),
+                     cr.get("reference_level"),
+                     cr.get("tested_level")),
                 )
     conn.commit()
     conn.close()
@@ -1147,6 +1149,17 @@ def cmd_forensics(args: argparse.Namespace) -> None:
     print(f"Forensics report written to {report_path}")
 
 
+def cmd_forest_plot(args: argparse.Namespace) -> None:
+    """Render publication-ready forest plot for Cox PH results."""
+    from core.reporting.forest_plot import render_forest
+
+    result = render_forest(args.study_id, args.output, ascii=args.ascii)
+    if args.ascii:
+        print(result)
+    else:
+        print(f"Forest plot written to {result}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="research-tool", description="Retrospective clinical research tool")
     sub = p.add_subparsers(dest="command")
@@ -1304,6 +1317,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Run data anomaly-detection checks")
     sp.add_argument("study_id")
     sp.set_defaults(func=cmd_forensics)
+
+    # plot-forest
+    sp = sub.add_parser("plot-forest",
+                        help="Render forest plot for Cox PH results")
+    sp.add_argument("study_id")
+    sp.add_argument("--svg", dest="output", type=str, default=None,
+                    help="Output SVG path (default: data/studies/<id>/forest_plot.svg)")
+    sp.add_argument("--ascii", action="store_true",
+                    help="Render as ASCII text instead of SVG")
+    sp.set_defaults(func=cmd_forest_plot)
 
     return p
 

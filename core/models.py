@@ -68,7 +68,9 @@ CREATE TABLE IF NOT EXISTS analysis_covariate_results (
     wald_p      REAL,
     coef        REAL,
     se          REAL,
-    z           REAL
+    z           REAL,
+    reference_level TEXT,
+    tested_level TEXT
 );
 """
 
@@ -87,8 +89,12 @@ CREATE TABLE IF NOT EXISTS analysis_covariate_results (
     wald_p      REAL,
     coef        REAL,
     se          REAL,
-    z           REAL
+    z           REAL,
+    reference_level TEXT,
+    tested_level TEXT
 );
+ALTER TABLE analysis_covariate_results ADD COLUMN reference_level TEXT;
+ALTER TABLE analysis_covariate_results ADD COLUMN tested_level TEXT;
 """
 
 # ── Dataclasses ─────────────────────────────────────────────────────────────
