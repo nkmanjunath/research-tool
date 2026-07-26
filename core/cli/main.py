@@ -1127,6 +1127,18 @@ def cmd_export(args: argparse.Namespace) -> None:
         print("  (supplementary mode — no row-level data included)")
 
 
+def cmd_lineage(args: argparse.Namespace) -> None:
+    """Render study provenance DAG to stdout (text) or file (SVG)."""
+    from core.reporting.lineage import assemble_events, render_text, render_svg
+
+    events = assemble_events(args.study_id)
+    if args.svg:
+        render_svg(events, args.svg)
+        print(f"Lineage DAG written to {args.svg}")
+    else:
+        print(render_text(events))
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="research-tool", description="Retrospective clinical research tool")
     sub = p.add_subparsers(dest="command")
@@ -1271,6 +1283,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("study_id")
     sp.add_argument("--output", type=str, help="Custom output file path")
     sp.set_defaults(func=cmd_export_excel)
+
+    # lineage
+    sp = sub.add_parser("lineage", help="Render study provenance DAG")
+    sp.add_argument("study_id")
+    sp.add_argument("--svg", type=str, default=None,
+                    help="Output path for SVG file (omit for ASCII terminal output)")
+    sp.set_defaults(func=cmd_lineage)
 
     return p
 
