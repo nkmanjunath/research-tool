@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import random
 import shutil
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from core.cli.main import cmd_plan, cmd_analyze, cmd_lock
@@ -14,6 +18,7 @@ from core.database import DATA_ROOT, get_connection, init_db
 from core.planning.study_plan import StudyPlan
 from core.planning.lock import lock_plan
 from core.masking.gate import unmask_study
+from core.stats.inferential import _cox_ph_model
 
 STUDY_ID = "test_cox_plan"
 RAW = f"raw_{STUDY_ID}"
@@ -307,3 +312,187 @@ def test_cox_ph_regression_locked_plan_reload():
     assert row["statistic"] > 0, "HR must be positive"
 
     shutil.rmtree(study_path)
+
+
+# ── Interaction term tests with adequate N ──────────────────────────────
+
+
+def _synthetic_interaction_data(n: int, seed: int,
+                                true_interaction: bool = True) -> pd.DataFrame:
+    """Generate synthetic survival data with a known treatment × subgroup interaction.
+
+    Parameters
+    ----------
+    n : int
+        Number of patients.
+    seed : int
+        Random seed for reproducibility.
+    true_interaction : bool
+        If True, treatment effect differs by subgroup (HR_subgroup_B = 1.0).
+        If False, treatment effect is same across subgroups (no interaction).
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        pfs_days, pfs_event, treatment_arm, high_risk_fish, age
+    """
+    rng = random.Random(seed)
+    np_rng = np.random.RandomState(seed)
+
+    data = []
+    for _ in range(n):
+        arm = rng.choice(["A", "B"])
+        fish = rng.choices(["yes", "no"], weights=[0.4, 0.6])[0]
+        age = rng.randint(40, 85)
+
+        # Baseline hazard: exp(-t/200)
+        # Base HR for treatment (arm B vs A) — always present
+        if arm == "B":
+            base_hr = 0.5  # treatment halves hazard
+        else:
+            base_hr = 1.0
+
+        # Interaction: in high-risk subgroup, treatment effect differs
+        if fish == "yes" and arm == "B":
+            if true_interaction:
+                fish_hr = 2.0  # treatment loses effectiveness in high-risk
+            else:
+                fish_hr = 1.0  # no interaction, same effect
+        else:
+            fish_hr = 1.0
+
+        hr = base_hr * fish_hr
+
+        # Generate survival time from exponential with rate=hr/200
+        t = np_rng.exponential(200.0 / hr)
+        pfs_days = max(1, int(t))
+
+        # Censor at 500 days
+        event = 1 if pfs_days < 500 else 0
+        pfs_days = min(pfs_days, 500)
+
+        data.append((pfs_days, event, arm, fish, age))
+
+    return pd.DataFrame(data, columns=["pfs_days", "pfs_event",
+                                       "treatment_arm", "high_risk_fish", "age"])
+
+
+class TestInteractionTerms:
+    """Verify Cox PH interaction term detection with adequate power."""
+
+    def test_true_interaction_detected(self):
+        """Model with interaction should recover significant interaction term (N=400)."""
+        df = _synthetic_interaction_data(400, seed=42, true_interaction=True)
+        result = _cox_ph_model(
+            df,
+            time_col="pfs_days",
+            event_col="pfs_event",
+            group_col="treatment_arm",
+            covariates=["high_risk_fish", "age"],
+            interaction_terms=[["treatment_arm", "high_risk_fish"]],
+        )
+        cov_results = result.get("params", {}).get("per_covariate_results", [])
+        int_rows = [c for c in cov_results if "(interaction)" in c.get("covariate", "")]
+        assert len(int_rows) > 0, "No interaction term found in results"
+        int_row = int_rows[0]
+        assert int_row["hr"] is not None, "Interaction HR should not be None"
+        assert int_row["wald_p"] is not None, "Interaction p-value should not be None"
+        # With true interaction built in and N=400, p should be significant
+        assert int_row["wald_p"] < 0.05, (
+            f"True interaction should be detected (p={int_row['wald_p']:.4f})"
+        )
+
+    def test_no_interaction_not_detected(self):
+        """Model with no interaction should have non-significant interaction term."""
+        df = _synthetic_interaction_data(400, seed=43, true_interaction=False)
+        result = _cox_ph_model(
+            df,
+            time_col="pfs_days",
+            event_col="pfs_event",
+            group_col="treatment_arm",
+            covariates=["high_risk_fish", "age"],
+            interaction_terms=[["treatment_arm", "high_risk_fish"]],
+        )
+        cov_results = result.get("params", {}).get("per_covariate_results", [])
+        int_rows = [c for c in cov_results if "(interaction)" in c.get("covariate", "")]
+        assert len(int_rows) > 0, "No interaction term found in results"
+        int_row = int_rows[0]
+        # With no interaction, CI should cross 1
+        ci_lo = int_row.get("ci_lower")
+        ci_hi = int_row.get("ci_upper")
+        if ci_lo is not None and ci_hi is not None:
+            assert ci_lo <= 1 <= ci_hi, (
+                f"No-interaction CI ({ci_lo:.3f}, {ci_hi:.3f}) should cross 1"
+            )
+
+    def test_epv_counts_interaction_as_predictor(self):
+        """EPV check should count interaction terms as additional predictors."""
+        from core.planning.test_selector import check_cox_ph_model_assumptions
+
+        # Build a small dataset so EPV < 10 is triggered
+        study_id = "test_epv_interaction"
+        study_path = DATA_ROOT / study_id
+        if study_path.exists():
+            shutil.rmtree(study_path)
+        study_path.mkdir(parents=True)
+        conn = get_connection(study_id)
+        init_db(conn)
+        conn.execute(
+            "INSERT OR REPLACE INTO studies (id, name, created_at, data_dir, study_type) VALUES (?, ?, ?, ?, ?)",
+            (study_id, "EPV Interaction Test", "2025-01-01", str(study_path), "cohort"),
+        )
+        conn.execute(
+            f"CREATE TABLE IF NOT EXISTS raw_masked_{study_id} AS "
+            "SELECT * FROM (SELECT 'A' AS treatment_arm, 'yes' AS high_risk_fish, "
+            "'1' AS pfs_event, 100 AS pfs_days, 50 AS age) WHERE 1=0"
+        )
+        # Insert 5 events across 4 patients → EPV=5/3≈1.7 with interaction
+        rows = [
+            ("A", "yes", "1", 100, 50),
+            ("A", "no", "0", 200, 55),
+            ("B", "yes", "1", 80, 60),
+            ("B", "no", "1", 150, 45),
+        ]
+        for r in rows:
+            conn.execute(
+                f"INSERT INTO raw_masked_{study_id} "
+                f"(treatment_arm, high_risk_fish, pfs_event, pfs_days, age) "
+                f"VALUES (?, ?, ?, ?, ?)", r
+            )
+        conn.execute(
+            "INSERT OR REPLACE INTO variables (id, study_id, column_name, role, data_type) "
+            "VALUES (1, ?, 'treatment_arm', 'baseline', 'categorical')",
+            (study_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO variables (id, study_id, column_name, role, data_type) "
+            "VALUES (2, ?, 'pfs_days', 'outcome', 'time_to_event')",
+            (study_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO variables (id, study_id, column_name, role, data_type) "
+            "VALUES (3, ?, 'pfs_event', 'outcome', 'categorical')",
+            (study_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        model = {
+            "model_name": "test_interaction",
+            "survival_time_col": "pfs_days",
+            "event_col": "pfs_event",
+            "primary_treatment_col": "treatment_arm",
+            "covariate_cols": ["high_risk_fish"],
+            "interaction_terms": [["treatment_arm", "high_risk_fish"]],
+        }
+        warnings = check_cox_ph_model_assumptions(study_id, [model])
+        warning_text = " ".join(warnings)
+        # The warning should mention 3 predictors (treatment + 1 covariate + 1 interaction)
+        assert "3 predictor" in warning_text, (
+            f"EPV warning should count 3 predictors: {warning_text}"
+        )
+        assert "EPV=" in warning_text, (
+            "EPV warning should fire when interaction adds a predictor"
+        )
+
+        shutil.rmtree(study_path)

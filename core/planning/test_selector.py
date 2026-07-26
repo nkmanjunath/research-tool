@@ -431,13 +431,15 @@ def check_cox_ph_model_assumptions(
                 "event_col": model.event_col,
                 "primary_treatment_col": model.primary_treatment_col,
                 "covariate_cols": model.covariate_cols,
+                "interaction_terms": list(model.interaction_terms) if hasattr(model, "interaction_terms") else [],
             }
 
         survival_time_col = m.get("survival_time_col", "")
         event_col = m.get("event_col", "")
         covariate_cols = m.get("covariate_cols", [])
+        interaction_terms = m.get("interaction_terms", [])
 
-        if not survival_time_col or not event_col or not covariate_cols:
+        if not survival_time_col or not event_col:
             continue
 
         if var_info.get(survival_time_col) != "time_to_event":
@@ -445,8 +447,8 @@ def check_cox_ph_model_assumptions(
 
         shadow_table = f"raw_masked_{study_id}"
 
-        # Total predictors = primary treatment + covariates
-        total_predictors = 1 + len(covariate_cols)
+        # Total predictors = primary treatment + covariates + interaction terms
+        total_predictors = 1 + len(covariate_cols) + len(interaction_terms)
 
         try:
             row = conn.execute(

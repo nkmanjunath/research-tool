@@ -101,9 +101,10 @@ def run_test(
         return _cox_ph(data, time_col, event_col, group_col, covariates or [])
     elif test_name == "cox_ph_model":
         var_types = kwargs.get("var_types", {})
+        interaction_terms = kwargs.get("interaction_terms", [])
         try:
             return _cox_ph_model(data, time_col, event_col, group_col, covariates or [],
-                                 var_types=var_types)
+                                 var_types=var_types, interaction_terms=interaction_terms)
         except ConvergenceError as e:
             return _uro(
                 test_name=test_name, n_analyzed=len(data),
@@ -353,19 +354,14 @@ def _cox_ph(data: pd.DataFrame, time_col: str, event_col: str,
 
 def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
                   group_col: str, covariates: list[str],
-                  var_types: dict[str, str] | None = None) -> dict:
+                  var_types: dict[str, str] | None = None,
+                  interaction_terms: list[list[str]] | None = None) -> dict:
     """Multivariable Cox PH model returning per-covariate HRs, CIs, and overall model stats.
-
-    Uses lifelines' formula API to properly handle categorical variables.
-
-    Parameters
-    ----------
-    var_types : dict[str, str] | None
-        Map of column_name → data_type ('continuous', 'categorical', etc.)
-        from the tool's variable classifier.  When None, falls back to
-        pandas dtype check (brittle for TEXT-stored data).
+    interaction_terms: list of [var_a, var_b] pairs for a*b expansion.
     """
     from lifelines import CoxPHFitter
+
+    interaction_terms = interaction_terms or []
 
     if not event_col or event_col not in data.columns:
         raise ValueError(
@@ -375,11 +371,14 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
             f"and an event indicator column."
         )
 
-    # All columns needed: time, event, primary treatment, covariates
+    # All columns needed
     all_cols = [time_col, event_col, group_col] + covariates
+    for pair in interaction_terms:
+        for v in pair:
+            if v not in all_cols:
+                all_cols.append(v)
     df = data[all_cols].copy()
 
-    # Determine numeric vs categorical from classifier, not raw SQLite dtype
     var_types = var_types or {}
     numeric_cols = [time_col, event_col]
     for c in covariates:
@@ -389,8 +388,7 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
     for c in numeric_cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
-    
-    # Keep group_col as-is (could be categorical)
+
     df = df.dropna()
 
     if df.empty:
@@ -399,19 +397,19 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
             params={"error": "No valid data after dropping NAs"},
         )
 
-    # Build formula: group_col + covariates
+    # Build formula: group_col + covariates + interaction terms (a*b)
     formula_terms = [group_col] + covariates
+    for pair in interaction_terms:
+        formula_terms.append(f"{pair[0]} * {pair[1]}")
     formula = " + ".join(formula_terms)
 
     cph = CoxPHFitter()
     cph.fit(df, duration_col=time_col, event_col=event_col, formula=formula)
 
-    # --- Primary treatment effect (backward compat) ---
+    # --- Primary treatment effect ---
     hr = None
     ci = None
     p = None
-
-    # Find the coefficient for the primary treatment variable
     for cov in cph.summary.index:
         if cov.startswith(group_col) or cov == group_col:
             hr = cph.hazard_ratios_.get(cov, None)
@@ -430,7 +428,6 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
             cov_hr = cph.hazard_ratios_.get(idx, None)
             cov_ci = cph.confidence_intervals_.loc[idx] if idx in cph.confidence_intervals_.index else None
 
-            # Determine reference and tested levels for categorical covariates
             ref_level = None
             tested_level = None
             if idx != cov:
@@ -452,6 +449,27 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
                 "z": float(row["z"]) if "z" in row else None,
                 "reference_level": ref_level,
                 "tested_level": tested_level,
+            })
+
+    # --- Interaction terms ---
+    for pair in interaction_terms:
+        int_name = f"{pair[0]}:{pair[1]}"
+        # lifelines puts categorical level suffixes: treatment_arm[T.B]:high_risk_fish[T.yes]
+        pattern = rf"^{re.escape(pair[0])}(?:\[.*?\])?:{re.escape(pair[1])}(?:\[.*?\])?$"
+        matching = [idx for idx in cph.summary.index if re.match(pattern, idx)]
+        for idx in matching:
+            row = cph.summary.loc[idx]
+            covariate_results.append({
+                "covariate": f"{int_name} (interaction)",
+                "hr": float(cph.hazard_ratios_.get(idx, 0)) if cph.hazard_ratios_.get(idx) else None,
+                "ci_lower": np.exp(float(cph.confidence_intervals_.loc[idx].iloc[0])) if idx in cph.confidence_intervals_.index else None,
+                "ci_upper": np.exp(float(cph.confidence_intervals_.loc[idx].iloc[1])) if idx in cph.confidence_intervals_.index else None,
+                "wald_p": float(row["p"]) if "p" in row else None,
+                "coef": float(row["coef"]) if "coef" in row else None,
+                "se": float(row["se"]) if "se" in row else None,
+                "z": float(row["z"]) if "z" in row else None,
+                "reference_level": None,
+                "tested_level": None,
             })
 
     # --- Overall model statistics ---
