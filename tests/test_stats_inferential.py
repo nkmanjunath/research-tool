@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from lifelines.exceptions import ConvergenceWarning
 
 from core.stats.inferential import run_test
 
@@ -131,6 +132,8 @@ def test_cox_ph_rejects_missing_event_col():
                  event_col="pfs_event", covariates=[])
 
 
+@pytest.mark.filterwarnings("ignore::lifelines.exceptions.ConvergenceWarning")
+@pytest.mark.filterwarnings("ignore:overflow encountered in exp:RuntimeWarning")
 def test_cox_ph_model_treats_string_stored_numeric_as_continuous():
     """String-dtype column (simulating SQLite TEXT ingest) with 'continuous'
     in var_types must be converted to numeric, not treated as categorical.
@@ -169,6 +172,8 @@ def test_cox_ph_model_treats_string_stored_numeric_as_continuous():
     )
 
 
+@pytest.mark.filterwarnings("ignore::lifelines.exceptions.ConvergenceWarning")
+@pytest.mark.filterwarnings("ignore:overflow encountered in exp:RuntimeWarning")
 def test_cox_ph_model_without_var_types_falls_back_to_dtype():
     """When var_types is None, fall back to pandas dtype check."""
     df = pd.DataFrame({
@@ -218,6 +223,8 @@ def test_cox_ph_model_returns_hr_scale_ci():
             f"{cov['covariate']}: CI ({cov['ci_lower']}, {cov['ci_upper']}) must contain HR ({cov['hr']})"
 
 
+@pytest.mark.filterwarnings("ignore::lifelines.exceptions.ConvergenceWarning")
+@pytest.mark.filterwarnings("ignore:overflow encountered in exp:RuntimeWarning")
 def test_cox_ph_model_overflow_ci_upper_becomes_inf():
     """Near-complete separation produces inf upper CI — must not crash."""
     df = pd.DataFrame({
@@ -237,6 +244,8 @@ def test_cox_ph_model_overflow_ci_upper_becomes_inf():
     assert result["ci_lower"] is not None
 
 
+@pytest.mark.filterwarnings("ignore::lifelines.exceptions.ConvergenceWarning")
+@pytest.mark.filterwarnings("ignore:overflow encountered in exp:RuntimeWarning")
 def test_cox_ph_model_persists_params_to_db():
     """Cox PH model-level fields and covariate rows must be persisted to DB."""
     import json, shutil
