@@ -52,7 +52,42 @@ CREATE TABLE IF NOT EXISTS analysis_results (
     is_pre_registered INTEGER NOT NULL DEFAULT 1,
     provenance_json   TEXT,          -- JSON blob
     computed_at       TEXT NOT NULL,
-    superseded_previous_result_id INTEGER DEFAULT NULL
+    superseded_previous_result_id INTEGER DEFAULT NULL,
+    lr_test_p         REAL,
+    concordance_index REAL,
+    ph_diagnostics_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS analysis_covariate_results (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL REFERENCES analysis_results(id),
+    covariate   TEXT NOT NULL,
+    hr          REAL,
+    ci_lower    REAL,
+    ci_upper    REAL,
+    wald_p      REAL,
+    coef        REAL,
+    se          REAL,
+    z           REAL
+);
+"""
+
+MIGRATIONS_SQL = """
+ALTER TABLE analysis_results ADD COLUMN lr_test_p REAL;
+ALTER TABLE analysis_results ADD COLUMN concordance_index REAL;
+ALTER TABLE analysis_results ADD COLUMN ph_diagnostics_json TEXT;
+
+CREATE TABLE IF NOT EXISTS analysis_covariate_results (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    result_id   INTEGER NOT NULL REFERENCES analysis_results(id),
+    covariate   TEXT NOT NULL,
+    hr          REAL,
+    ci_lower    REAL,
+    ci_upper    REAL,
+    wald_p      REAL,
+    coef        REAL,
+    se          REAL,
+    z           REAL
 );
 """
 

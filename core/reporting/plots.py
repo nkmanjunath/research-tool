@@ -262,9 +262,17 @@ def _build_risk_axes(ax_risk, groups, at_risk_data, visible_ticks,
     for spine in ax_risk.spines.values():
         spine.set_visible(False)
 
-    # Set y-ticks to group labels
+    # Set y-ticks to group labels — invert y-axis so group[0] appears at TOP
+    # matching legend order (legend lists first entry at top)
     ax_risk.set_yticks(range(len(groups)))
     ax_risk.set_yticklabels(groups, fontweight="bold", fontsize=ytick_fontsize)
+    ax_risk.invert_yaxis()
+
+    # Color-code row labels to match curve colors (publication standard)
+    colors = ["#1f77b4", "#ff7f0e"]
+    for i, label in enumerate(ax_risk.get_yticklabels()):
+        if i < len(colors):
+            label.set_color(colors[i])
 
     # No x-axis ticks or labels (they live on ax_km between the two subplots)
     ax_risk.set_xticks([])
@@ -274,15 +282,16 @@ def _build_risk_axes(ax_risk, groups, at_risk_data, visible_ticks,
     ax_risk.tick_params(axis="y", length=0, pad=ytick_pad)
 
     # Visual separator line at the top of the risk table (boundary with KM plot)
-    ylim_top = len(groups) - 0.5
+    # After invert_yaxis, "top" in data coords is y=0, so line = -0.5; draw just above it
     ax_risk.axhline(
-        y=ylim_top + 0.5, color="gray", linewidth=0.5, alpha=0.3,
+        y=-0.5, color="gray", linewidth=0.5, alpha=0.3,
     )
 
-    # Set y-lim to center groups
-    ax_risk.set_ylim(-0.5, len(groups) - 0.5)
+    # Set y-lim to center groups (inverted: from -0.5 at top to n-0.5 at bottom)
+    ax_risk.set_ylim(len(groups) - 0.5, -0.5)
 
     # Place the at-risk count text at each (tick, group) intersection
+    # gi indexes groups in original order; after invert_yaxis, gi=0 plots at top
     for gi, row in enumerate(at_risk_data):
         for ti, tick in enumerate(visible_ticks):
             ax_risk.text(
@@ -496,7 +505,9 @@ def generate_km_plot(
 
     # ── X-axis framing ───────────────────────────────────────────────────
     if max_observed_time > 0:
-        ax_km.set_xlim(0, max_observed_time)
+        # Add 5% right padding so curves don't collide with right border
+        right_pad = max_observed_time * 0.05
+        ax_km.set_xlim(0, max_observed_time + right_pad)
     ax_km.set_ylim(0, 1.05)
     ax_km.grid(True, alpha=cfg.grid_alpha)
 

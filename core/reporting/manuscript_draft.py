@@ -40,7 +40,7 @@ def _filter_superseded(rows: list) -> list:
     return [r for r in rows if r["id"] not in superseded_ids]
 
 
-def _format_analysis_result(a) -> str:
+def _format_analysis_result(a, covariate_rows: list[dict] | None = None) -> str:
     """Format a single analysis result as markdown."""
     import json
     tag = ""
@@ -48,7 +48,6 @@ def _format_analysis_result(a) -> str:
     rationale_suffix = ""
     if not a["is_pre_registered"]:
         tag = " **[EXPLORATORY_POST_HOC]**"
-        # Amendment reason was stored in provenance_json at analyze time
         prov = _json_field(a, "provenance_json")
         reason = prov.get("amendment_reason", "")
         if reason:
@@ -74,6 +73,22 @@ def _format_analysis_result(a) -> str:
         lines.append(f"  95% CI: ({a['ci_lower']:.3f}, {a['ci_upper']:.3f})\n")
     if a["adjusted_p_value"] is not None:
         lines.append(f"  Corrected p-value: {a['adjusted_p_value']:.4f}\n")
+    if "lr_test_p" in a and a["lr_test_p"] is not None:
+        lines.append(f"  Likelihood-ratio test p: {a['lr_test_p']:.4f}\n")
+    if "concordance_index" in a and a["concordance_index"] is not None:
+        lines.append(f"  Concordance index: {a['concordance_index']:.3f}\n")
+
+    # Per-covariate table for Cox PH models
+    if covariate_rows:
+        lines.append("\n  | Covariate | HR | 95% CI | p |\n")
+        lines.append("  |---|---|---|---|\n")
+        for cr in covariate_rows:
+            hr = f"{cr['hr']:.3f}" if cr.get("hr") is not None else "—"
+            cl = f"{cr['ci_lower']:.3f}" if cr.get("ci_lower") is not None else "—"
+            cu = f"{cr['ci_upper']:.3f}" if cr.get("ci_upper") is not None else "—"
+            wp = f"{cr['wald_p']:.4f}" if cr.get("wald_p") is not None else "—"
+            lines.append(f"  | {cr['covariate']} | {hr} | ({cl}, {cu}) | {wp} |\n")
+
     lines.append("\n")
     return "".join(lines)
 
@@ -211,7 +226,7 @@ def generate_limitations(study_id: str) -> str:
     # predictor. Prefer a persisted event count; otherwise derive it from
     # the event indicator in the raw or masked table.
     for a in analyses:
-        if a["test_name"] == "cox_proportional_hazards":
+        if a["test_name"] in ("cox_proportional_hazards", "cox_ph_model"):
             sc = json.loads(a["sample_counts_json"]) if a["sample_counts_json"] else {}
             planned = next((
                 t for t in (plan_data or {}).get("planned_tests", [])
@@ -223,7 +238,11 @@ def generate_limitations(study_id: str) -> str:
             if n_events is None:
                 continue
             n_events = int(n_events)
-            n_predictors = n_covariates + 1  # +1 for treatment_arm
+            if a["test_name"] == "cox_ph_model":
+                # For cox_ph_model, predictor count = treatment + covariates from the plan
+                n_predictors = n_covariates + 1
+            else:
+                n_predictors = n_covariates + 1  # +1 for treatment_arm
             n_predictors = max(n_predictors, 1)
             epv = n_events / n_predictors
             if epv < 10:
@@ -273,6 +292,27 @@ def generate_draft(study_id: str) -> str:
 
     cur = conn.execute("SELECT * FROM analysis_results WHERE study_id=? ORDER BY id", (study_id,))
     analyses = _filter_superseded(cur.fetchall())
+
+    # Pre-fetch per-covariate results for Cox PH models
+    covariate_map: dict[int, list[dict]] = {}
+    if analyses:
+        result_ids = [a["id"] for a in analyses]
+        placeholders = ",".join("?" for _ in result_ids)
+        cur = conn.execute(
+            f"SELECT * FROM analysis_covariate_results WHERE result_id IN ({placeholders}) ORDER BY id",
+            result_ids,
+        )
+        for row in cur.fetchall():
+            covariate_map.setdefault(row["result_id"], []).append({
+                "covariate": row["covariate"],
+                "hr": row["hr"],
+                "ci_lower": row["ci_lower"],
+                "ci_upper": row["ci_upper"],
+                "wald_p": row["wald_p"],
+                "coef": row["coef"],
+                "se": row["se"],
+                "z": row["z"],
+            })
 
     conn.close()
 
@@ -425,13 +465,13 @@ def generate_draft(study_id: str) -> str:
         if pre_reg:
             results_section += "### Primary Pre-Registered Analysis\n\n"
             for a in pre_reg:
-                results_section += _format_analysis_result(a)
+                results_section += _format_analysis_result(a, covariate_map.get(a["id"]))
 
         # ── Post-Hoc / Exploratory Analyses ──────────────────────────────
         if post_hoc:
             results_section += "### Post-Hoc / Exploratory Analyses\n\n"
             for a in post_hoc:
-                results_section += _format_analysis_result(a)
+                results_section += _format_analysis_result(a, covariate_map.get(a["id"]))
         else:
             results_section += "**Exploratory analyses:** None recorded.\n\n"
     else:

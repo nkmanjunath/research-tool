@@ -216,11 +216,21 @@ class ChiSquareAssumptionCheck(AssumptionCheck):
                     min_expected = exp
 
         if min_expected < 5:
+            r, c = len(row_marginals), len(col_marginals)
+            if r == 2 and c == 2:
+                alt = "Consider using fisher_exact instead."
+            else:
+                alt = (
+                    "Table is not 2×2; fisher_exact is not applicable. "
+                    "Options: (1) Collapse outcome to binary (e.g., ORR: CR+PR vs rest) "
+                    "and re-declare with fisher_exact; (2) Descriptive only "
+                    "(matches small-N oncology practice); "
+                    "(3) Ordinal test if proportional odds assumption is plausible."
+                )
             return [
                 f"chi_square on '{var_name}': minimum expected cell count is "
                 f"{min_expected:.1f} (below 5 threshold for a "
-                f"{len(row_marginals)}×{len(col_marginals)} table). "
-                f"Consider using fisher_exact instead."
+                f"{r}×{c} table). {alt}"
             ]
 
         return []
@@ -360,12 +370,118 @@ class CoxPHAssumptionCheck(AssumptionCheck):
 
         return []
 
-# FIXME: Add ANOVA variance-homogeneity check here.
-#        Must check homogeneity using ONLY baseline/group marginal data.
-#        Relevant test_names: "anova"
+
+@_register
+class CoxPHModelAssumptionCheck(AssumptionCheck):
+    """Screen multivariable Cox PH model declarations for EPV feasibility.
+
+    This check applies to declared CoxPHModel objects in the study plan.
+    """
+
+    def applies_to(self, test_name: str) -> bool:
+        # This doesn't apply to a test_name directly; it's checked separately
+        return False
+
+    def check(self, study_id: str, test: dict, group_col: str, conn, var_info: dict) -> list[str]:
+        # Not used via the standard check_assumptions dispatcher
+        return []
 
 
-# ── Public API ─────────────────────────────────────────────────────────
+def check_cox_ph_model_assumptions(
+    study_id: str,
+    models: list,
+    group_col: str = "treatment_arm",
+) -> list[str]:
+    """Check assumptions for declared multivariable Cox PH models.
+
+    Parameters
+    ----------
+    study_id : str
+    models : list[CoxPHModel] or list[dict]
+        List of declared Cox PH models from the study plan.
+    group_col : str
+        Column name for the comparison groups (e.g. treatment_arm).
+
+    Returns
+    -------
+    list[str]
+        Warning strings — empty when no assumptions are violated.
+    """
+    if not models:
+        return []
+
+    conn = get_connection(study_id)
+
+    # Pre-fetch variable data types
+    cur = conn.execute(
+        "SELECT column_name, data_type FROM variables WHERE study_id=?",
+        (study_id,),
+    )
+    var_info = {r["column_name"]: r["data_type"] for r in cur.fetchall()}
+
+    warnings: list[str] = []
+
+    for model in models:
+        if isinstance(model, dict):
+            m = model
+        else:
+            m = {
+                "model_name": model.model_name,
+                "survival_time_col": model.survival_time_col,
+                "event_col": model.event_col,
+                "primary_treatment_col": model.primary_treatment_col,
+                "covariate_cols": model.covariate_cols,
+            }
+
+        survival_time_col = m.get("survival_time_col", "")
+        event_col = m.get("event_col", "")
+        covariate_cols = m.get("covariate_cols", [])
+
+        if not survival_time_col or not event_col or not covariate_cols:
+            continue
+
+        if var_info.get(survival_time_col) != "time_to_event":
+            continue
+
+        shadow_table = f"raw_masked_{study_id}"
+
+        # Total predictors = primary treatment + covariates
+        total_predictors = 1 + len(covariate_cols)
+
+        try:
+            row = conn.execute(
+                f'SELECT COUNT("{event_col}") AS n_events '
+                f'FROM {shadow_table} '
+                f'WHERE CAST("{event_col}" AS INTEGER) = 1'
+            ).fetchone()
+        except Exception:
+            warnings.append(
+                f"cox_ph_model '{m.get('model_name', 'unnamed')}': "
+                "could not count events from shadow table."
+            )
+            continue
+
+        n_events = int(row["n_events"] or 0)
+        if n_events == 0:
+            warnings.append(
+                f"cox_ph_model '{m.get('model_name', 'unnamed')}': "
+                "zero events recorded in pooled data — Cox model cannot converge."
+            )
+            continue
+
+        epv = n_events / total_predictors if total_predictors > 0 else n_events
+        if epv < 10:
+            warnings.append(
+                f"cox_ph_model '{m.get('model_name', 'unnamed')}': "
+                f"{n_events} events across {total_predictors} predictor(s) "
+                f"(EPV={epv:.1f}). "
+                f"Cox models are unreliable below 10 events per predictor. "
+                f"Consider reducing the number of covariates or using a "
+                f"simpler analysis."
+            )
+
+    conn.close()
+    return warnings
 
 
 def check_assumptions(
