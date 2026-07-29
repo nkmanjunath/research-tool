@@ -209,12 +209,20 @@ def _build_tab1_summary(ws, study_id, study, plan_data, analyses, strobe_satisfi
 
     # Pre-registered rows
     pre_start = r
-    for a in pre_reg:
+    for a in analyses:
+        if not a["is_pre_registered"]:
+            continue
         test_name = a["test_name"]
         stat = f"{a['statistic']:.4f}" if a["statistic"] is not None else "N/A"
         pv = f"{a['p_value']:.4f}" if a["p_value"] is not None else "N/A"
         pre = "YES"
+        status_data = json.loads(a["status_json"]) if a["status_json"] else {}
+        status = status_data.get("status", "completed")
+        from core.planning.diagnostics import check_violation
+        has_viol, viol_summary, _ = check_violation(dict(a))
         sig = "Significant" if (a["p_value"] is not None and a["p_value"] < 0.05) else "Not Significant"
+        if has_viol:
+            sig = f"Significant — ⚠ assumption violation"
         vals = [test_name, stat, pv, pre, sig, "Pre-registered primary protocol"]
         for ci, v in enumerate(vals, 1):
             ws.cell(row=r, column=ci, value=v).font = BODY_FONT
@@ -451,9 +459,19 @@ def _build_tab3_analyses(wb, study_id, analyses):
     _style_header_row(ws, 1, len(headers))
 
     r = 2
+    footnote_idx = 0
+    footnotes: list[str] = []
     for a in analyses:
         status_data = json.loads(a["status_json"]) if a["status_json"] else {}
         status = status_data.get("status", "completed")
+        from core.planning.diagnostics import check_violation
+        has_viol, viol_summary, _ = check_violation(dict(a))
+        display_status = status
+        if has_viol:
+            footnote_idx += 1
+            marker = chr(0x2460 + footnote_idx - 1)  # circled digits: ① ② ...
+            display_status = f"{status} {marker}"
+            footnotes.append(f"{marker} {viol_summary}")
         sc = json.loads(a["sample_counts_json"]) if a["sample_counts_json"] else {}
         n = sc.get("n_analyzed", "")
         test_name = a["test_name"]
@@ -464,8 +482,18 @@ def _build_tab3_analyses(wb, study_id, analyses):
             comparison = f"{v_clean} by Treatment Arm"
         ci_lower_str = f"{a['ci_lower']:.4f}" if a["ci_lower"] is not None else "N/A"
         ci_upper_str = f"{a['ci_upper']:.4f}" if a["ci_upper"] is not None else "N/A"
-        lr_p_str = f"{a['lr_test_p']:.4f}" if "lr_test_p" in a and a["lr_test_p"] is not None else ""
-        c_index_str = f"{a['concordance_index']:.3f}" if "concordance_index" in a and a["concordance_index"] is not None else ""
+        lr_p_str = ""
+        c_index_str = ""
+        try:
+            if a["lr_test_p"] is not None:
+                lr_p_str = f"{a['lr_test_p']:.4f}"
+        except (KeyError, IndexError, TypeError):
+            pass
+        try:
+            if a["concordance_index"] is not None:
+                c_index_str = f"{a['concordance_index']:.3f}"
+        except (KeyError, IndexError, TypeError):
+            pass
         vals = [
             a["id"],
             test_name,
@@ -479,7 +507,7 @@ def _build_tab3_analyses(wb, study_id, analyses):
             ci_upper_str,
             lr_p_str,
             c_index_str,
-            status,
+            display_status,
             "YES" if a["is_pre_registered"] else "NO  [POST-HOC]",
         ]
         for ci, v in enumerate(vals, 1):
@@ -505,6 +533,11 @@ def _build_tab3_analyses(wb, study_id, analyses):
 
     _apply_zebra(ws, 2, r - 1, len(headers))
 
+    # Footnotes for assumption violations
+    for note in footnotes:
+        ws.cell(row=r, column=1, value=note).font = Font(name="Calibri", italic=True, size=9, color="C0392B")
+        r += 1
+
 
 # ── Tab 4: Audit & Hash Manifest ────────────────────────────────────────
 
@@ -519,22 +552,10 @@ def _build_tab4_audit(wb, study_id, plan_data):
     ws.cell(row=1, column=2).fill = NAVY_FILL
     ws.cell(row=1, column=2).border = THIN_BORDER
 
-    import hashlib
-
-    def _sha256(content: str | bytes) -> str:
-        if isinstance(content, str):
-            content = content.encode("utf-8")
-        return hashlib.sha256(content).hexdigest()
-
-    def _canonical_json(obj) -> str:
-        return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    from core.provenance.hashing import sha256 as _sha256, canonical_json as _canonical_json, compute_raw_data_hash
 
     conn = get_connection(study_id)
-    raw_table = f"raw_{study_id}"
-    import pandas as pd
-    df = pd.read_sql_query(f"SELECT * FROM {raw_table} ORDER BY row_id", conn)
-    raw_data_json = _canonical_json(df.to_dict(orient="records"))
-    raw_data_hash = _sha256(raw_data_json)
+    raw_data_hash = compute_raw_data_hash(study_id)
 
     locked_plan_hash = plan_data.get("content_hash", "N/A")
 

@@ -78,8 +78,15 @@ def cmd_classify_variables(args: argparse.Namespace) -> None:
     # After classification, seal outcome values into shadow table
     seal_outcomes(args.study_id)
 
-    for s in suggestions:
-        print(f"  {s['column']:<30} → {s['role']:<10} {s['data_type']}")
+    # Query back to get DB-assigned IDs
+    conn = get_connection(args.study_id)
+    rows = conn.execute(
+        "SELECT id, column_name, role, data_type FROM variables WHERE study_id=? ORDER BY id",
+        (args.study_id,),
+    ).fetchall()
+    conn.close()
+    for r in rows:
+        print(f"  {r['id']:<4} {r['column_name']:<30} → {r['role']:<10} {r['data_type']}")
 
 
 def cmd_explore_baseline(args: argparse.Namespace) -> None:
@@ -107,22 +114,77 @@ def cmd_explore_baseline(args: argparse.Namespace) -> None:
             print(r)
 
 
+def cmd_list_variables(args: argparse.Namespace) -> None:
+    """List all classified variables with their DB IDs."""
+    conn = get_connection(args.study_id)
+    rows = conn.execute(
+        "SELECT id, column_name, role, data_type FROM variables WHERE study_id=? ORDER BY id",
+        (args.study_id,),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        print(f"No variables classified for study '{args.study_id}'. Run 'classify-variables' first.")
+        return
+    print(f"  {'ID':<4} {'Column':<30} {'Role':<12} {'Type'}")
+    print(f"  {'──':<4} {'──────':<30} {'────':<12} ────")
+    for r in rows:
+        print(f"  {r['id']:<4} {r['column_name']:<30} {r['role']:<12} {r['data_type']}")
+
+
 def cmd_plan(args: argparse.Namespace) -> None:
     """Declare a study plan."""
+
+    # Load from JSON if --from-json is provided
+    json_path = getattr(args, "from_json", None)
+    if json_path:
+        from pathlib import Path
+        import json as _json
+        data = _json.loads(Path(json_path).read_text())
+        # Override args with JSON values (CLI flags still win if provided)
+        if "comparison" in data:
+            args.comparison = data["comparison"]
+        if "outcome_var_ids" in data:
+            v = data["outcome_var_ids"]
+            args.outcome_var_ids = ",".join(str(x) for x in v) if isinstance(v, list) else v
+        if "study_type" in data:
+            args.study_type = data["study_type"]
+        if "tests" in data:
+            args.tests = data["tests"]
+        if "covariates" in data:
+            v = data["covariates"]
+            args.covariates = ",".join(str(x) for x in v) if isinstance(v, list) else v
+        if "cox_ph_models" in data:
+            args.cox_ph_models = data["cox_ph_models"]
+        if "interaction_terms" in data:
+            args.interaction_terms = data["interaction_terms"]
+        if "matching_criteria" in data:
+            v = data["matching_criteria"]
+            args.matching_criteria = ",".join(str(x) for x in v) if isinstance(v, list) else v
+        if "overrides" in data:
+            args.overrides = data["overrides"]
+
     outcome_ids = [int(x) for x in args.outcome_var_ids.split(",")]
     tests = []
     if args.tests:
         for t in args.tests:
-            parts = t.split(":", 2)
-            # Format: variable_name:test_name:[rationale]
-            var_name = parts[0] if len(parts) > 0 else ""
-            test_name = parts[1] if len(parts) > 1 else ""
-            rationale = parts[2] if len(parts) > 2 else ""
-            tests.append({
-                "variable_name": var_name,
-                "test_name": test_name,
-                "rationale": rationale,
-            })
+            if isinstance(t, dict):
+                # Native JSON dict (from --from-json)
+                tests.append({
+                    "variable_name": t.get("variable_name", ""),
+                    "test_name": t.get("test_name", ""),
+                    "rationale": t.get("rationale", ""),
+                })
+            else:
+                parts = t.split(":", 2)
+                # Format: variable_name:test_name:[rationale]
+                var_name = parts[0] if len(parts) > 0 else ""
+                test_name = parts[1] if len(parts) > 1 else ""
+                rationale = parts[2] if len(parts) > 2 else ""
+                tests.append({
+                    "variable_name": var_name,
+                    "test_name": test_name,
+                    "rationale": rationale,
+                })
     covariates = [int(x) for x in args.covariates.split(",")] if args.covariates else []
     matching_criteria = [int(x) for x in args.matching_criteria.split(",")] if getattr(args, "matching_criteria", None) else []
 
@@ -130,42 +192,59 @@ def cmd_plan(args: argparse.Namespace) -> None:
     cox_ph_models = []
     if getattr(args, "cox_ph_models", None):
         for m in args.cox_ph_models:
-            # Format: model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]
-            parts = m.split(":")
-            if len(parts) < 4:
-                print(f"Error: invalid Cox PH model format '{m}'. Use model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]", file=sys.stderr)
-                sys.exit(1)
-            model_name = parts[0]
-            survival_time_col = parts[1]
-            event_col = parts[2]
-            primary_treatment_col = parts[3]
-            if len(parts) >= 6:
-                covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
-                rationale = parts[5]
-            elif len(parts) == 5:
-                covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
-                rationale = ""
+            if isinstance(m, dict):
+                # Native JSON dict (from --from-json)
+                cox_ph_models.append({
+                    "model_name": m.get("model_name", ""),
+                    "survival_time_col": m.get("survival_time_col", ""),
+                    "event_col": m.get("event_col", ""),
+                    "primary_treatment_col": m.get("primary_treatment_col", ""),
+                    "covariate_cols": m.get("covariate_cols", []),
+                    "rationale": m.get("rationale", ""),
+                    "interaction_terms": m.get("interaction_terms", []),
+                })
             else:
-                covariate_cols = []
-                rationale = ""
-            cox_ph_models.append({
-                "model_name": model_name,
-                "survival_time_col": survival_time_col,
-                "event_col": event_col,
-                "primary_treatment_col": primary_treatment_col,
-                "covariate_cols": covariate_cols,
-                "rationale": rationale,
-                "interaction_terms": [],
-            })
+                # Format: model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]
+                parts = m.split(":")
+                if len(parts) < 4:
+                    print(f"Error: invalid Cox PH model format '{m}'. Use model_name:survival_time_col:event_col:primary_treatment_col[:covariate_cols[:rationale]]", file=sys.stderr)
+                    sys.exit(1)
+                model_name = parts[0]
+                survival_time_col = parts[1]
+                event_col = parts[2]
+                primary_treatment_col = parts[3]
+                if len(parts) >= 6:
+                    covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
+                    rationale = parts[5]
+                elif len(parts) == 5:
+                    covariate_cols = [c.strip() for c in parts[4].split(",")] if parts[4] else []
+                    rationale = ""
+                else:
+                    covariate_cols = []
+                    rationale = ""
+                cox_ph_models.append({
+                    "model_name": model_name,
+                    "survival_time_col": survival_time_col,
+                    "event_col": event_col,
+                    "primary_treatment_col": primary_treatment_col,
+                    "covariate_cols": covariate_cols,
+                    "rationale": rationale,
+                    "interaction_terms": [],
+                })
 
     # Parse interaction terms and attach to the named model
     if getattr(args, "interaction_terms", None):
         for spec in args.interaction_terms:
-            parts = spec.split(":")
-            if len(parts) != 3:
-                print(f"Error: invalid interaction term format '{spec}'. Use model_name:var_a:var_b", file=sys.stderr)
-                sys.exit(1)
-            model_name, var_a, var_b = parts
+            if isinstance(spec, dict):
+                model_name = spec.get("model_name", "")
+                var_a = spec.get("var_a", "")
+                var_b = spec.get("var_b", "")
+            else:
+                parts = spec.split(":")
+                if len(parts) != 3:
+                    print(f"Error: invalid interaction term format '{spec}'. Use model_name:var_a:var_b", file=sys.stderr)
+                    sys.exit(1)
+                model_name, var_a, var_b = parts
             found = False
             for m in cox_ph_models:
                 if m["model_name"] == model_name:
@@ -488,9 +567,94 @@ def cmd_amend(args: argparse.Namespace) -> None:
 
 
 def cmd_unmask(args: argparse.Namespace) -> None:
-    """Unmask outcome data (irreversible)."""
+    """Unmask outcome data (irreversible).  Gates on pre-unmask diagnostics."""
+    # Load plan to check diagnostic results
+    from core.planning.lock import load_plan
+    from core.database import get_connection
+    from datetime import datetime, timezone
+    import json
+
+    try:
+        plan = load_plan(args.study_id)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Error loading plan: {e}", file=sys.stderr)
+        print("Unmask requires a locked plan. Run 'research-tool lock' first.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    diag_results = getattr(plan, "diagnostic_results", [])
+    pre_unmask = [d for d in diag_results if d.get("stage") == "pre_unmask"]
+
+    forceable_fails = [d for d in pre_unmask if d.get("status") == "fail" and d.get("forceable") == True]
+    non_forceable_fails = [d for d in pre_unmask if d.get("status") == "fail" and d.get("forceable") != True]
+
+    # Tier 1: non-forceable fails → always block, no flag bypasses
+    if non_forceable_fails:
+        print(
+            f"Error: cannot unmask — {len(non_forceable_fails)} non-overridable "
+            f"diagnostic check(s) failed:\n",
+            file=sys.stderr,
+        )
+        for d in non_forceable_fails:
+            print(f"  [{d['check_name']}] {d['message']}", file=sys.stderr)
+        print(
+            "\nThese checks assess fundamental data integrity for the planned analyses.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Tier 2: forceable fails → block unless user provides override justification
+    force_justification = getattr(args, "force", None)
+    if forceable_fails:
+        if not force_justification:
+            print(
+                f"Error: {len(forceable_fails)} diagnostic check(s) require review:\n",
+                file=sys.stderr,
+            )
+            for d in forceable_fails:
+                print(f"  [{d['check_name']}] {d['message']}", file=sys.stderr)
+            print(
+                "\nThese do not block unmask unconditionally, but require a documented "
+                "justification.\n"
+                "Provide one with:  research-tool unmask <study_id> --force '<your reason>'\n"
+                "The justification is permanently recorded in the study's audit trail.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Log the override to the DB
+        conn = get_connection(args.study_id)
+        override_events = []
+        for d in forceable_fails:
+            override_events.append({
+                "check_name": d["check_name"],
+                "message": d["message"],
+                "justification": force_justification,
+                "overridden_at": datetime.now(timezone.utc).isoformat(),
+            })
+        existing = conn.execute(
+            "SELECT unmask_audit_json FROM studies WHERE id=?",
+            (args.study_id,),
+        ).fetchone()
+        audit_log = []
+        if existing and existing["unmask_audit_json"]:
+            audit_log = json.loads(existing["unmask_audit_json"])
+        audit_log.extend(override_events)
+        conn.execute(
+            "UPDATE studies SET unmask_audit_json=? WHERE id=?",
+            (json.dumps(audit_log), args.study_id),
+        )
+        conn.commit()
+        conn.close()
+
     unmask_study(args.study_id)
-    print("Study unmasked. Outcome data now visible (outcome values restored from shadow table).")
+    msg = "Study unmasked. Outcome data now visible."
+    if forceable_fails:
+        msg += (
+            f" {len(forceable_fails)} diagnostic override(s) recorded "
+            f"in unmask_audit_json."
+        )
+    print(msg)
 
 
 def cmd_table1(args: argparse.Namespace) -> None:
@@ -539,137 +703,139 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     conn = get_connection(args.study_id)
     init_db(conn)
 
-    # Parse --force, --post-hoc, --rerun flags
+    # Parse --force, --rerun flags
     force = getattr(args, "force", False)
-    is_post_hoc = getattr(args, "post_hoc", False)
     rerun = getattr(args, "rerun", False)
 
-    # Determine which test list to run
-    test_list = plan.post_hoc_tests if is_post_hoc else plan.planned_tests
-    is_pre_registered = 0 if is_post_hoc else 1
+    # Build combined test list: planned tests (pre-registered) + post-hoc tests (exploratory)
+    # The --post-hoc flag on analyze is legacy; analyze now runs both lists automatically.
+    test_runs: list[tuple[list[dict], int, str]] = []  # (tests, is_pre_registered, label)
+    if plan.planned_tests:
+        test_runs.append((plan.planned_tests, 1, "pre-registered"))
+    if plan.post_hoc_tests:
+        test_runs.append((plan.post_hoc_tests, 0, "post-hoc"))
 
     # Enforce assumption warnings from plan time
     plan_warnings = getattr(plan, "warnings", {})
 
-    # Run standard planned tests
-    for t in test_list:
-        var_name = t.get("variable_name", "")
-        test_name = t.get("test_name", "")
-        test_rationale = t.get("rationale", "")
-        if not test_name or not var_name:
-            continue
-
-        # Dedup: skip if completed result already exists for this exact test
-        if not rerun:
-            existing = conn.execute(
-                """SELECT id, computed_at FROM analysis_results
-                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
-                         study_plan_version=? AND is_pre_registered=?
-                         AND json_extract(status_json, '$.status') = 'completed'
-                         AND superseded_previous_result_id IS NULL
-                   ORDER BY id DESC LIMIT 1""",
-                (args.study_id, test_name, json.dumps([]),
-                 plan.version, is_pre_registered),
-            ).fetchone()
-            if existing:
-                print(
-                    f"Test '{test_name}' on '{var_name}' already completed "
-                    f"under plan v{plan.version} (result id {existing['id']}, "
-                    f"computed {existing['computed_at']}). "
-                    f"Skipping — use --rerun to force recomputation."
-                )
+    # Run all test lists
+    for test_list, is_pre_registered, _label in test_runs:
+        for t in test_list:
+            var_name = t.get("variable_name", "")
+            test_name = t.get("test_name", "")
+            test_rationale = t.get("rationale", "")
+            if not test_name or not var_name:
                 continue
 
-        # For post-hoc tests, scan forward to find which amendment version
-        # first declared this specific test (test_name + rationale match)
-        # and record its amendment_reason and declaring version.
-        ph_reason = ""
-        declaring_version = plan.version
-        if is_post_hoc:
-            for v in range(1, plan.version + 1):
-                try:
-                    p = load_plan(args.study_id, version=v)
-                except Exception:
+            # Dedup: skip if completed result already exists for this exact test
+            if not rerun:
+                existing = conn.execute(
+                    """SELECT id, computed_at FROM analysis_results
+                       WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                             study_plan_version=? AND is_pre_registered=?
+                             AND json_extract(status_json, '$.status') = 'completed'
+                             AND superseded_previous_result_id IS NULL
+                       ORDER BY id DESC LIMIT 1""",
+                    (args.study_id, test_name, json.dumps([]),
+                     plan.version, is_pre_registered),
+                ).fetchone()
+                if existing:
+                    print(
+                        f"Test '{test_name}' on '{var_name}' already completed "
+                        f"under plan v{plan.version} (result id {existing['id']}, "
+                        f"computed {existing['computed_at']}). "
+                        f"Skipping — use --rerun to force recomputation."
+                    )
                     continue
-                reason = getattr(p, "amendment_reason", "")
-                if not reason:
-                    continue
-                for pt in p.post_hoc_tests:
-                    if pt.get("test_name") == test_name and (
-                        not test_rationale
-                        or not pt.get("rationale", "")
-                        or pt.get("rationale", "") == test_rationale
-                    ):
-                        ph_reason = reason
-                        declaring_version = v
-                        break
-                if ph_reason:
-                    break
-        if var_name in plan_warnings and not force:
-            # Suggest the appropriate alternative based on test type
-            alt_test = {"chi_square": "fisher_exact",
-                        "t_test": "mann_whitney",
-                        "paired_t_test": "wilcoxon_signed_rank"}.get(test_name, "")
-            alt_hint = ""
-            if alt_test:
-                alt_hint = (
-                    f"Redeclare the plan with an alternative test via:\n"
-                    f"  research-tool plan ... --test \"{var_name}:{alt_test}:...\"\n"
-                )
-            print(
-                f"Skipping '{test_name}' on '{var_name}' — "
-                f"plan time warning recorded:\n"
-                f"  {plan_warnings[var_name]}\n"
-                f"Use '--force' to run despite warnings, or {alt_hint}",
-                file=sys.stderr,
-            )
-            # Record the skipped test in the DB so the audit trail is complete
-            skipped_uro = {
-                "test_name": test_name,
-                "statistic": None,
-                "p_value": None,
-                "ci_lower": None,
-                "ci_upper": None,
-                "params": {},
-                "effect_size": None,
-                "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
-                "status": "skipped_assumption_violation",
-                "reason": plan_warnings[var_name],
-                "rationale": test_rationale,
-                "amendment_reason": ph_reason,
-                "declaring_version": declaring_version,
-            }
-            results.append(skipped_uro)
-            continue
 
-        kwargs = {"outcome_col": var_name, "group_col": "treatment_arm"}
-        if test_name in ("kaplan_meier_logrank", "cox_proportional_hazards"):
-            # Convention: time_to_event variable named e.g. "pfs_days"
-            # has its event indicator in a column with the same prefix + "_event"
-            # or the same prefix minus "_days"/"_months" + "_event"
-            prefix = var_name.replace("_days", "").replace("_months", "").replace("_time", "")
-            kwargs["time_col"] = var_name
-            kwargs["event_col"] = f"{prefix}_event"
-        result = run_test(test_name, df, **kwargs)
-        result["status"] = "completed"
-        result["reason"] = None
-        result["rationale"] = t.get("rationale", "")
-        result["variable_name"] = var_name
-        result["amendment_reason"] = ph_reason
-        result["declaring_version"] = declaring_version
-        if result.get("params", {}).get("error"):
-            result["status"] = "error"
-            result["reason"] = result["params"]["error"]
-        results.append(result)
+            # For post-hoc tests, scan forward to find which amendment version
+            # first declared this specific test (test_name + rationale match)
+            # and record its amendment_reason and declaring version.
+            ph_reason = ""
+            declaring_version = plan.version
+            if is_pre_registered == 0:
+                for v in range(1, plan.version + 1):
+                    try:
+                        p = load_plan(args.study_id, version=v)
+                    except Exception:
+                        continue
+                    reason = getattr(p, "amendment_reason", "")
+                    if not reason:
+                        continue
+                    for pt in p.post_hoc_tests:
+                        if pt.get("test_name") == test_name and (
+                            not test_rationale
+                            or not pt.get("rationale", "")
+                            or pt.get("rationale", "") == test_rationale
+                        ):
+                            ph_reason = reason
+                            declaring_version = v
+                            break
+                    if ph_reason:
+                        break
+            if var_name in plan_warnings and not force:
+                # Suggest the appropriate alternative based on test type
+                alt_test = {"chi_square": "fisher_exact",
+                            "t_test": "mann_whitney",
+                            "paired_t_test": "wilcoxon_signed_rank"}.get(test_name, "")
+                alt_hint = ""
+                if alt_test:
+                    alt_hint = (
+                        f"Redeclare the plan with an alternative test via:\n"
+                        f"  research-tool plan ... --test \"{var_name}:{alt_test}:...\"\n"
+                    )
+                print(
+                    f"Skipping '{test_name}' on '{var_name}' — "
+                    f"plan time warning recorded:\n"
+                    f"  {plan_warnings[var_name]}\n"
+                    f"Use '--force' to run despite warnings, or {alt_hint}",
+                    file=sys.stderr,
+                )
+                # Record the skipped test in the DB so the audit trail is complete
+                skipped_uro = {
+                    "test_name": test_name,
+                    "is_pre_registered": is_pre_registered,
+                    "statistic": None,
+                    "p_value": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "params": {},
+                    "effect_size": None,
+                    "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
+                    "status": "skipped_assumption_violation",
+                    "reason": plan_warnings[var_name],
+                    "rationale": test_rationale,
+                    "amendment_reason": ph_reason,
+                    "declaring_version": declaring_version,
+                }
+                results.append(skipped_uro)
+                continue
+
+            kwargs = {"outcome_col": var_name, "group_col": "treatment_arm"}
+            if test_name in ("kaplan_meier_logrank", "cox_proportional_hazards"):
+                # Convention: time_to_event variable named e.g. "pfs_days"
+                # has its event indicator in a column with the same prefix + "_event"
+                # or the same prefix minus "_days"/"_months" + "_event"
+                prefix = var_name.replace("_days", "").replace("_months", "").replace("_time", "")
+                kwargs["time_col"] = var_name
+                kwargs["event_col"] = f"{prefix}_event"
+            result = run_test(test_name, df, **kwargs)
+            result["status"] = "completed"
+            result["reason"] = None
+            result["rationale"] = t.get("rationale", "")
+            result["variable_name"] = var_name
+            result["is_pre_registered"] = is_pre_registered
+            result["amendment_reason"] = ph_reason
+            result["declaring_version"] = declaring_version
+            if result.get("params", {}).get("error"):
+                result["status"] = "error"
+                result["reason"] = result["params"]["error"]
+            results.append(result)
 
     # Run Cox PH models if declared in the plan
     cox_ph_models = getattr(plan, "cox_ph_models", [])
     if cox_ph_models:
-        # Determine if we're running pre-registered or post-hoc models
-        model_list = cox_ph_models
-        model_is_pre_registered = 0 if is_post_hoc else 1
-
-        for model in model_list:
+        for model in cox_ph_models:
             model_name = _model_field(model, "model_name")
             survival_time_col = _model_field(model, "survival_time_col")
             event_col = _model_field(model, "event_col")
@@ -718,7 +884,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                              AND superseded_previous_result_id IS NULL
                        ORDER BY id DESC LIMIT 1""",
                     (args.study_id, "cox_ph_model", json.dumps([]),
-                     plan.version, model_is_pre_registered),
+                     plan.version, 1),  # Cox PH models are always pre-registered
                 ).fetchone()
                 if existing:
                     print(
@@ -776,23 +942,24 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     # Track superseded results for --rerun
     supersede_map: dict[str, int] = {}
     if rerun:
-        for t in test_list:
-            var_name = t.get("variable_name", "")
-            test_name = t.get("test_name", "")
-            if not test_name or not var_name:
-                continue
-            existing = conn.execute(
-                """SELECT id FROM analysis_results
-                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
-                         study_plan_version=? AND is_pre_registered=?
-                         AND json_extract(status_json, '$.status') = 'completed'
-                         AND superseded_previous_result_id IS NULL
-                   ORDER BY id DESC LIMIT 1""",
-                (args.study_id, test_name, json.dumps([]),
-                 plan.version, is_pre_registered),
-            ).fetchone()
-            if existing:
-                supersede_map[test_name] = existing["id"]
+        for test_list, is_pre_registered, _label in test_runs:
+            for t in test_list:
+                var_name = t.get("variable_name", "")
+                test_name = t.get("test_name", "")
+                if not test_name or not var_name:
+                    continue
+                existing = conn.execute(
+                    """SELECT id FROM analysis_results
+                       WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                             study_plan_version=? AND is_pre_registered=?
+                             AND json_extract(status_json, '$.status') = 'completed'
+                             AND superseded_previous_result_id IS NULL
+                       ORDER BY id DESC LIMIT 1""",
+                    (args.study_id, test_name, json.dumps([]),
+                     plan.version, is_pre_registered),
+                ).fetchone()
+                if existing:
+                    supersede_map[test_name] = existing["id"]
 
         # Also check for Cox PH models
         if cox_ph_models:
@@ -804,7 +971,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                          AND superseded_previous_result_id IS NULL
                    ORDER BY id DESC LIMIT 1""",
                 (args.study_id, "cox_ph_model", json.dumps([]),
-                 plan.version, model_is_pre_registered),
+                 plan.version, 1),
             ).fetchone()
             if existing:
                 supersede_map["cox_ph_model"] = existing["id"]
@@ -814,15 +981,27 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         status_record = {"status": r.get("status", "completed")}
         if r.get("reason"):
             status_record["reason"] = r["reason"]
-        stored_version = r.get("declaring_version", plan.version) if is_post_hoc else plan.version
+
+        # Promote completed Cox PH results with Schoenfeld violations
+        params = r.get("params", {})
+        ph_diag = params.get("assumption_diagnostics") if params else None
+        if status_record["status"] == "completed" and ph_diag:
+            covs = ph_diag.get("covariates", [])
+            violations = [c for c in covs if c.get("p_value", 1) < 0.05]
+            if violations:
+                names = "; ".join(f"{v['covariate']} (p={v['p_value']:.4f})" for v in violations)
+                status_record = {
+                    "status": "assumption_violation",
+                    "reason": f"Proportional hazards assumption violated: {names}",
+                }
+        stored_version = r.get("declaring_version", plan.version)
         prov = {"plan_version": stored_version}
-        if is_post_hoc:
-            rationale = r.get("rationale", "")
-            if rationale:
-                prov["rationale"] = rationale
-            ph_reason = r.get("amendment_reason", "")
-            if ph_reason:
-                prov["amendment_reason"] = ph_reason
+        ph_reason = r.get("amendment_reason", "")
+        if ph_reason:
+            prov["amendment_reason"] = ph_reason
+        rationale = r.get("rationale", "")
+        if rationale:
+            prov["rationale"] = rationale
         superseded_id = supersede_map.get(r.get("test_name", ""))
         params = r.get("params", {})
         lr_test_p = params.get("lr_test_p_value") if params else None
@@ -843,7 +1022,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
              json.dumps(r["effect_size"]) if r.get("effect_size") else None,
              json.dumps(r["sample_counts"]) if r.get("sample_counts") else None,
              json.dumps(status_record),
-             is_pre_registered,
+             r.get("is_pre_registered", 1),
              json.dumps(prov), now,
              superseded_id,
              lr_test_p, concordance,
@@ -978,9 +1157,36 @@ def cmd_export_excel(args: argparse.Namespace) -> None:
 
 def cmd_export(args: argparse.Namespace) -> None:
     """Export study as study_result.v1.json (portable, reviewer-ready)."""
+    # Check for post-unmask diagnostic violations before export
+    from core.planning.diagnostics import check_violation
+    conn = get_connection(args.study_id)
+    violations: list[str] = []
+    for a in conn.execute(
+        "SELECT status_json, ph_diagnostics_json FROM analysis_results WHERE study_id=?",
+        (args.study_id,),
+    ).fetchall():
+        has_v, summary, _ = check_violation(dict(a))
+        if has_v:
+            violations.append(summary)
+    if violations and not getattr(args, "acknowledge_violations", False):
+        print(
+            f"Error: {len(violations)} post-unmask diagnostic violation(s) found:\n",
+            file=sys.stderr,
+        )
+        for v in violations:
+            print(f"  • {v}", file=sys.stderr)
+        print(
+            "\nExported results would include these violations — they are disclosed in output\n"
+            "artifacts. Pass --acknowledge-violations to confirm you have reviewed them\n"
+            "and wish to proceed with export.",
+            file=sys.stderr,
+        )
+        conn.close()
+        sys.exit(1)
+    conn.close()
+
     import json
     from datetime import datetime, timezone
-    from hashlib import sha256
     import pandas as pd
 
     conn = get_connection(args.study_id)
@@ -1127,19 +1333,12 @@ def cmd_export(args: argparse.Namespace) -> None:
         ),
     }
 
-    # Data hash for authenticity (SHA-256 of raw_data JSON)
+    # Data hash for authenticity (SHA-256 of raw data, canonical JSON)
     try:
-        cur = conn.execute(f"SELECT json_row FROM raw_data WHERE study_id=? ORDER BY row_id", (args.study_id,))
-        raw_json = json.dumps([dict(r) for r in cur.fetchall()]).encode()
-        export["study_metadata"]["data_hash_sha256"] = sha256(raw_json).hexdigest()
+        from core.provenance.hashing import compute_raw_data_hash
+        export["study_metadata"]["data_hash_sha256"] = compute_raw_data_hash(args.study_id)
     except Exception:
-        # raw_data table may not exist in older studies — try the raw_ table
-        try:
-            df = pd.read_sql_query(f"SELECT * FROM {raw_table}", conn)
-            raw_json = df.to_json(orient="records").encode()
-            export["study_metadata"]["data_hash_sha256"] = sha256(raw_json).hexdigest()
-        except Exception:
-            export["study_metadata"]["data_hash_sha256"] = None
+        export["study_metadata"]["data_hash_sha256"] = None
 
     conn.close()
 
@@ -1183,7 +1382,11 @@ def cmd_forest_plot(args: argparse.Namespace) -> None:
     """Render publication-ready forest plot for Cox PH results."""
     from core.reporting.forest_plot import render_forest
 
-    result = render_forest(args.study_id, args.output, ascii=args.ascii)
+    try:
+        result = render_forest(args.study_id, args.output, ascii=args.ascii)
+    except ValueError as e:
+        print(f"Error: {e}\nRun 'plan', 'lock', 'unmask', and 'analyze' first.", file=sys.stderr)
+        sys.exit(1)
     if args.ascii:
         print(result)
     else:
@@ -1234,6 +1437,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--head", type=int, default=5)
     sp.set_defaults(func=cmd_explore_baseline)
 
+    # list-variables
+    sp = sub.add_parser("list-variables", help="List classified variables with their DB IDs")
+    sp.add_argument("study_id")
+    sp.set_defaults(func=cmd_list_variables)
+
     # plan
     sp = sub.add_parser("plan", help="Declare the study plan (declare intent before seeing outcomes)")
     sp.add_argument("study_id")
@@ -1250,6 +1458,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Interaction term for a Cox PH model in format 'model_name:var_a:var_b'")
     sp.add_argument("--override", action="append", dest="overrides", default=[],
                     help="Override a classified role before lock: id=<variable_id>:role=<role>")
+    sp.add_argument("--from-json", type=str, default=None,
+                    help="Load plan from a JSON file instead of CLI flags. "
+                         "Expected keys: comparison, outcome_var_ids, study_type, tests, "
+                         "covariates, cox_ph_models, interaction_terms, matching_criteria, overrides")
     sp.set_defaults(func=cmd_plan)
 
     # lock
@@ -1275,6 +1487,9 @@ def build_parser() -> argparse.ArgumentParser:
     # unmask
     sp = sub.add_parser("unmask", help="Unmask outcome data (irreversible)")
     sp.add_argument("study_id")
+    sp.add_argument("--force", nargs="?", const="", default=None,
+                    help="Override forceable diagnostic warnings. Provide a justification string: "
+                         "--force 'your reason'")
     sp.set_defaults(func=cmd_unmask)
 
     # table1
@@ -1341,6 +1556,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--version", dest="study_plan_version", help="Plan version label (e.g. v1)")
     sp.add_argument("--format", choices=["json", "appendix"], default="json",
                     help="Export JSON, or JSON plus a manuscript appendix Markdown file")
+    sp.add_argument("--acknowledge-violations", action="store_true",
+                    help="Acknowledge post-unmask diagnostic violations and proceed with export")
     sp.set_defaults(func=cmd_export)
 
     # export-excel

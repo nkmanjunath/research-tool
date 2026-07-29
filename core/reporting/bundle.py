@@ -10,7 +10,6 @@ Composite hash: SHA-256 of raw_data_hash || locked_plan_hash || results_hash
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import tarfile
@@ -20,22 +19,12 @@ from pathlib import Path
 from typing import Optional
 
 from core.database import get_connection, DATA_ROOT
+from core.provenance.hashing import sha256 as _sha256, canonical_json as _canonical_json
 
 
 SCHEMA_VERSION = "1.0.0"
 HASH_ORDER = ("raw_data_hash", "locked_plan_hash", "results_hash")
 COMPOSITE_SEPARATOR = "||"  # documented separator between hashes in the concatenation
-
-
-def _sha256(content: str | bytes) -> str:
-    if isinstance(content, str):
-        content = content.encode("utf-8")
-    return hashlib.sha256(content).hexdigest()
-
-
-def _canonical_json(obj) -> str:
-    """Deterministic JSON serialization (sorted keys, no extra whitespace)."""
-    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _compute_composite(*component_hashes: str) -> str:
