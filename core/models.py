@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS studies (
     study_type  TEXT,                -- cohort | case_control | cross_sectional
     is_locked   INTEGER NOT NULL DEFAULT 0,  -- 0 = pre-lock, 1 = locked, 2 = unmasked
     unmasked_at TEXT,                -- ISO-8601 timestamp of unmask event
-    data_dir    TEXT NOT NULL
+    data_dir    TEXT NOT NULL,
+    unmask_audit_json TEXT           -- JSON array of override events
 );
 
 CREATE TABLE IF NOT EXISTS variables (
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS analysis_covariate_results (
 );
 ALTER TABLE analysis_covariate_results ADD COLUMN reference_level TEXT;
 ALTER TABLE analysis_covariate_results ADD COLUMN tested_level TEXT;
+ALTER TABLE studies ADD COLUMN unmask_audit_json TEXT;
 """
 
 # ── Dataclasses ─────────────────────────────────────────────────────────────
@@ -118,32 +120,6 @@ class Variable:
     role: str  # "baseline" | "outcome"
     data_type: str  # "categorical" | "continuous" | "time_to_event"
     is_masked: bool = True
-
-
-@dataclass
-class StudyPlan:
-    study_id: str
-    version: int = 1
-    locked_at: Optional[str] = None
-    primary_comparison: str = ""
-    primary_outcome_variable_ids: list[int] = field(default_factory=list)
-    planned_tests: list[dict] = field(default_factory=list)
-    covariates: list[int] = field(default_factory=list)
-    file_path: Optional[str] = None
-    warnings: dict[str, str] = field(default_factory=dict)
-    role_overrides: dict[int, str] = field(default_factory=dict)
-    audit: dict = field(default_factory=dict)
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @staticmethod
-    def from_dict(d: dict) -> StudyPlan:
-        d.setdefault("warnings", {})
-        d.setdefault("role_overrides", {})
-        d.setdefault("audit", {})
-        d["role_overrides"] = {int(k): v for k, v in d["role_overrides"].items()}
-        return StudyPlan(**d)
 
 
 @dataclass
