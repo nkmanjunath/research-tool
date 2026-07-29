@@ -301,7 +301,7 @@ class TestChiSquareAssumptionWarning:
         assert "minimum expected cell count" in warning_msg
         assert "1.0" in warning_msg or "1" in warning_msg  # min expected = 1.0
         assert "6×2" in warning_msg or "6x2" in warning_msg.lower()
-        assert "fisher_exact" in warning_msg.lower()
+        assert "fishers_exact" in warning_msg.lower()
 
     def test_analyze_skips_chi_square_without_force(self, benchmark_study):
         """Analyze should skip chi-square due to assumption warning (unless --force)."""

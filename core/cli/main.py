@@ -775,7 +775,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                         break
             if var_name in plan_warnings and not force:
                 # Suggest the appropriate alternative based on test type
-                alt_test = {"chi_square": "fisher_exact",
+                alt_test = {"chi_square": "fishers_exact",
                             "t_test": "mann_whitney",
                             "paired_t_test": "wilcoxon_signed_rank"}.get(test_name, "")
                 alt_hint = ""

@@ -218,12 +218,12 @@ class ChiSquareAssumptionCheck(AssumptionCheck):
         if min_expected < 5:
             r, c = len(row_marginals), len(col_marginals)
             if r == 2 and c == 2:
-                alt = "Consider using fisher_exact instead."
+                alt = "Consider using fishers_exact instead."
             else:
                 alt = (
-                    "Table is not 2×2; fisher_exact is not applicable. "
+                    "Table is not 2×2; fishers_exact is not applicable. "
                     "Options: (1) Collapse outcome to binary (e.g., ORR: CR+PR vs rest) "
-                    "and re-declare with fisher_exact; (2) Descriptive only "
+                    "and re-declare with fishers_exact; (2) Descriptive only "
                     "(matches small-N oncology practice); "
                     "(3) Ordinal test if proportional odds assumption is plausible."
                 )

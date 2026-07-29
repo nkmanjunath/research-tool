@@ -115,7 +115,7 @@ def test_chi_square_sparse_warning():
     # The warning may include example collapse like "CR+PR" - that's intentional guidance
     # Just ensure arm labels don't appear
     assert "A" not in msg.split(":")[1]  # arm labels should not appear after the colon
-    assert "fisher_exact" in msg  # recommends alternative
+    assert "fishers_exact" in msg  # recommends alternative
 
     shutil.rmtree(DATA_ROOT / study_id)
 
