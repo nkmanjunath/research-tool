@@ -566,7 +566,8 @@ def _build_tab4_audit(wb, study_id, plan_data):
     for r in cur.fetchall():
         row = dict(r)
         for jf in ("variable_ids_used", "effect_size_json",
-                   "sample_counts_json", "status_json", "provenance_json"):
+                   "sample_counts_json", "status_json", "provenance_json",
+                   "ph_diagnostics_json"):
             if row.get(jf):
                 try:
                     row[jf] = json.loads(row[jf])
