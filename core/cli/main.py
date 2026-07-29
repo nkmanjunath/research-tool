@@ -928,6 +928,21 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 result["reason"] = result["params"]["error"]
             results.append(result)
 
+    # Promote completed Cox PH results with Schoenfeld violations BEFORE
+    # multiple-testing correction (M3 fix: correction must see final statuses)
+    for r in results:
+        if r.get("status") != "completed":
+            continue
+        params = r.get("params", {})
+        ph_diag = params.get("assumption_diagnostics") if params else None
+        if ph_diag:
+            covs = ph_diag.get("covariates", [])
+            violations = [c for c in covs if c.get("p_value", 1) < 0.05]
+            if violations:
+                names = "; ".join(f"{v['covariate']} (p={v['p_value']:.4f})" for v in violations)
+                r["status"] = "assumption_violation"
+                r["reason"] = f"Proportional hazards assumption violated: {names}"
+
     # Apply multiple-testing correction to completed tests only
     completed = [r for r in results if r["status"] == "completed"]
     completed_p = [r["p_value"] for r in completed if r["p_value"] is not None]
@@ -982,18 +997,6 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         if r.get("reason"):
             status_record["reason"] = r["reason"]
 
-        # Promote completed Cox PH results with Schoenfeld violations
-        params = r.get("params", {})
-        ph_diag = params.get("assumption_diagnostics") if params else None
-        if status_record["status"] == "completed" and ph_diag:
-            covs = ph_diag.get("covariates", [])
-            violations = [c for c in covs if c.get("p_value", 1) < 0.05]
-            if violations:
-                names = "; ".join(f"{v['covariate']} (p={v['p_value']:.4f})" for v in violations)
-                status_record = {
-                    "status": "assumption_violation",
-                    "reason": f"Proportional hazards assumption violated: {names}",
-                }
         stored_version = r.get("declaring_version", plan.version)
         prov = {"plan_version": stored_version}
         ph_reason = r.get("amendment_reason", "")
