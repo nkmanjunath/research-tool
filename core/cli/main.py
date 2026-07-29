@@ -736,7 +736,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                              AND json_extract(status_json, '$.status') = 'completed'
                              AND superseded_previous_result_id IS NULL
                        ORDER BY id DESC LIMIT 1""",
-                    (args.study_id, test_name, json.dumps([]),
+                    (args.study_id, test_name, json.dumps([var_name]),
                      plan.version, is_pre_registered),
                 ).fetchone()
                 if existing:
@@ -883,7 +883,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                              AND json_extract(status_json, '$.status') = 'completed'
                              AND superseded_previous_result_id IS NULL
                        ORDER BY id DESC LIMIT 1""",
-                    (args.study_id, "cox_ph_model", json.dumps([]),
+                    (args.study_id, "cox_ph_model", json.dumps([model_name]),
                      plan.version, 1),  # Cox PH models are always pre-registered
                 ).fetchone()
                 if existing:
@@ -970,7 +970,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                              AND json_extract(status_json, '$.status') = 'completed'
                              AND superseded_previous_result_id IS NULL
                        ORDER BY id DESC LIMIT 1""",
-                    (args.study_id, test_name, json.dumps([]),
+                    (args.study_id, test_name, json.dumps([var_name]),
                      plan.version, is_pre_registered),
                 ).fetchone()
                 if existing:
@@ -978,18 +978,22 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
         # Also check for Cox PH models
         if cox_ph_models:
-            existing = conn.execute(
-                """SELECT id FROM analysis_results
-                   WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
-                         study_plan_version=? AND is_pre_registered=?
-                         AND json_extract(status_json, '$.status') = 'completed'
-                         AND superseded_previous_result_id IS NULL
-                   ORDER BY id DESC LIMIT 1""",
-                (args.study_id, "cox_ph_model", json.dumps([]),
-                 plan.version, 1),
-            ).fetchone()
-            if existing:
-                supersede_map["cox_ph_model"] = existing["id"]
+            for model in cox_ph_models:
+                mn = _model_field(model, "model_name")
+                if not mn:
+                    continue
+                existing = conn.execute(
+                    """SELECT id FROM analysis_results
+                       WHERE study_id=? AND test_name=? AND variable_ids_used=? AND
+                             study_plan_version=? AND is_pre_registered=?
+                             AND json_extract(status_json, '$.status') = 'completed'
+                             AND superseded_previous_result_id IS NULL
+                       ORDER BY id DESC LIMIT 1""",
+                    (args.study_id, "cox_ph_model", json.dumps([mn]),
+                     plan.version, 1),
+                ).fetchone()
+                if existing:
+                    supersede_map[f"cox_ph_model:{mn}"] = existing["id"]
 
     now = datetime.now(timezone.utc).isoformat()
     for r in results:
@@ -1005,7 +1009,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
         rationale = r.get("rationale", "")
         if rationale:
             prov["rationale"] = rationale
-        superseded_id = supersede_map.get(r.get("test_name", ""))
+        superseded_id = supersede_map.get(
+            f"{r.get('test_name', '')}:{r.get('variable_name', '')}"
+            if r.get("test_name") == "cox_ph_model"
+            else r.get("test_name", "")
+        )
         params = r.get("params", {})
         lr_test_p = params.get("lr_test_p_value") if params else None
         concordance = params.get("concordance_index") if params else None
@@ -1019,7 +1027,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 superseded_previous_result_id,
                 lr_test_p, concordance_index, ph_diagnostics_json)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (args.study_id, stored_version, json.dumps([]),
+            (args.study_id, stored_version, json.dumps([r.get("variable_name", "")]),
              r["test_name"], r["statistic"], r["p_value"],
              r.get("adjusted_p_value"), r.get("ci_lower"), r.get("ci_upper"),
              json.dumps(r["effect_size"]) if r.get("effect_size") else None,
