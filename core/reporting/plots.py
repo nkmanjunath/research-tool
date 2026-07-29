@@ -173,8 +173,9 @@ def _resolve_km_vars(study_id: str, test_id: int) -> dict:
         raise FileNotFoundError(f"No locked plan found for study '{study_id}'.")
 
     plan_data = json.loads(locked_plans[-1].read_text())
+    all_tests = plan_data.get("planned_tests", []) + plan_data.get("post_hoc_tests", [])
     planned_test = next(
-        (t for t in plan_data.get("planned_tests", [])
+        (t for t in all_tests
          if t.get("test_name") == "kaplan_meier_logrank"),
         None,
     )
@@ -395,6 +396,13 @@ def generate_km_plot(
         fig, ax_km = plt.subplots(figsize=(8, 5))
         ax_risk = None
 
+    # CI alpha: use preset value directly. For very small N (N<30 per arm),
+    # CI bands will be wide; the preset's alpha (0.12-0.30) keeps them
+    # visually subordinate to the step function. (§9: investigated N threshold;
+    # scaling was tested but collapsed preset differentiation. The issue is
+    # CI width, not alpha — preset alphas are already appropriate.)
+    effective_ci_alpha = cfg.ci_alpha
+
     for i, grp in enumerate(groups):
         grp_df = df[df[group_col] == grp].dropna(subset=[time_col, event_col]).copy()
         grp_df["_display_time"] = grp_df[time_col] / time_scale
@@ -408,7 +416,7 @@ def generate_km_plot(
             ax=ax_km,
             color=colors[i],
             ci_show=True,
-            ci_alpha=cfg.ci_alpha,
+            ci_alpha=effective_ci_alpha,
             show_censors=True,
             linewidth=cfg.linewidth,
         )
@@ -536,6 +544,11 @@ def generate_km_plot(
         )
 
     plt.tight_layout()
+    # Sync risk table position to match KM axes (§9 fix for alignment drift)
+    if ax_risk is not None:
+        km_pos = ax_km.get_position()
+        risk_pos = ax_risk.get_position()
+        ax_risk.set_position([km_pos.x0, risk_pos.y0, km_pos.width, risk_pos.height])
     fig.savefig(str(output_path), format=fmt, bbox_inches="tight")
     plt.close(fig)
 
