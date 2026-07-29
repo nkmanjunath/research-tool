@@ -36,6 +36,7 @@ class StudyPlan:
     locked_at: Optional[str] = None
     study_type: str = "cohort"  # cohort | case_control | cross_sectional
     primary_comparison: str = ""
+    primary_treatment_col: str = ""  # actual column name for groupby (M9)
     primary_outcome_variable_ids: list[int] = field(default_factory=list)
     planned_tests: list[dict] = field(default_factory=list)
     covariates: list[int] = field(default_factory=list)
@@ -46,6 +47,7 @@ class StudyPlan:
     post_hoc_tests: list[dict] = field(default_factory=list)
     amendment_reason: str = ""
     cox_ph_models: list[CoxPHModel] = field(default_factory=list)
+    diagnostic_results: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -58,9 +60,11 @@ class StudyPlan:
         d.setdefault("role_overrides", {})
         d.setdefault("audit", {})
         d.setdefault("matching_criteria", [])
+        d.setdefault("primary_treatment_col", "")
         d.setdefault("post_hoc_tests", [])
         d.setdefault("amendment_reason", "")
         d.setdefault("cox_ph_models", [])
+        d.setdefault("diagnostic_results", [])
         d.pop("content_hash", None)  # lock file artifact, not a model field
         d["role_overrides"] = {int(k): v for k, v in d["role_overrides"].items()}
         # Convert cox_ph_models dicts to CoxPHModel objects

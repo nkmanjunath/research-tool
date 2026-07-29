@@ -470,10 +470,17 @@ def cmd_plan(args: argparse.Namespace) -> None:
             if model_name in w:
                 warning_map[f"cox_ph_model:{model_name}"] = w
 
+    # Extract primary treatment column from Cox PH models if available
+    primary_treatment_col = ""
+    if cox_ph_models:
+        first_model = cox_ph_models[0]
+        primary_treatment_col = first_model.get("primary_treatment_col", "")
+
     plan = StudyPlan(
         study_id=args.study_id,
         study_type=args.study_type,
         primary_comparison=args.comparison,
+        primary_treatment_col=primary_treatment_col,
         primary_outcome_variable_ids=outcome_ids,
         planned_tests=tests,
         covariates=covariates,
@@ -668,7 +675,12 @@ def cmd_table1(args: argparse.Namespace) -> None:
     if groupby is None and not getattr(args, "overall", False):
         locked_paths = sorted(DATA_ROOT.glob(f"{args.study_id}/study_plan.v*.locked.json"))
         if locked_paths:
-            groupby = "treatment_arm"
+            from core.planning.lock import load_plan
+            try:
+                plan = load_plan(args.study_id)
+                groupby = plan.primary_treatment_col or "treatment_arm"
+            except (FileNotFoundError, ValueError):
+                groupby = "treatment_arm"
 
     tbl = generate_table1(args.study_id, groupby=groupby)
     if tbl.empty if hasattr(tbl, 'empty') else len(tbl) == 0:
@@ -1294,7 +1306,14 @@ def cmd_export(args: argparse.Namespace) -> None:
         export["analysis_results"].append(uro)
 
     # Table 1
-    export_groupby = "treatment_arm" if locked_paths else None
+    export_groupby = None
+    if locked_paths:
+        from core.planning.lock import load_plan as _load_plan_m9
+        try:
+            _plan = _load_plan_m9(args.study_id)
+            export_groupby = _plan.primary_treatment_col or "treatment_arm"
+        except (FileNotFoundError, ValueError):
+            export_groupby = "treatment_arm"
     tbl = generate_table1(args.study_id, groupby=export_groupby)
     if tbl is not None and not tbl.empty:
         # Flatten MultiIndex columns: ('Grouped by treatment_arm', 'A') → 'A'
