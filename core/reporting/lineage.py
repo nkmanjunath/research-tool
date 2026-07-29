@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.database import get_connection, DATA_ROOT
+from core.reporting import svg_escape as _svg_escape
 
 
 # ── Event model ──────────────────────────────────────────────────────────────
@@ -550,11 +551,6 @@ def render_svg(events: list[LineageEvent], output_path: str) -> None:
     svg = "\n".join(svg_parts)
 
     Path(output_path).write_text(svg)
-
-
-def _svg_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") \
-            .replace('"', "&quot;").replace("'", "&apos;")
 
 
 def _svg_wrap(w: int, h: int, body: str) -> str:

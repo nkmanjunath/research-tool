@@ -20,19 +20,7 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
-_ACRONYMS = frozenset({"PFS", "OS", "HR", "CI", "DFS", "ORR", "CR", "PR", "SD", "PD",
-                        "ISS", "ECOG", "LDH", "BMI", "IQR", "KM", "PH"})
-
-def _format_label(raw: str) -> str:
-    parts = raw.replace("_", " ").split()
-    out: list[str] = []
-    for p in parts:
-        upper = p.upper()
-        if upper in _ACRONYMS:
-            out.append(upper)
-        else:
-            out.append(p[0].upper() + p[1:] if p else p)
-    return " ".join(out)
+from core.reporting import format_label as _format_label
 
 
 from core.database import get_connection, DATA_ROOT

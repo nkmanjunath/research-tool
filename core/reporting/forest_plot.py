@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 from core.database import DATA_ROOT, get_connection, init_db
+from core.planning.diagnostics import check_violation
+from core.reporting import latest_locked_plan as _latest_locked_plan, svg_escape as _svg_escape
 
 
 @dataclass
@@ -24,6 +26,7 @@ class CovariateRow:
     reference_level: str | None = None
     tested_level: str | None = None
     unstable: bool = False
+    violated: bool = False
 
     @property
     def ci_crosses_one(self) -> bool:
@@ -49,6 +52,8 @@ class ForestPlotData:
     epv: float | None
     epv_warning: bool
     covariates: list[CovariateRow]
+    violation_warning: bool = False
+    violation_summary: str = ""
 
 
 def _extract_epv(warnings_text: str | None) -> tuple[float | None, bool]:
@@ -88,20 +93,19 @@ def _get_events_from_sample_counts(sc_json: str | None) -> int:
     return na
 
 
+
 def load_forest_data(study_id: str) -> ForestPlotData:
     conn = get_connection(study_id)
     init_db(conn)
 
-    study_dir = DATA_ROOT / study_id
-    plan_path = study_dir / "study_plan.v1.locked.json"
-    plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
+    plan = _latest_locked_plan(study_id)
 
     warnings_text = json.dumps(plan.get("warnings", {}))
     epv, epv_warn = _extract_epv(warnings_text)
 
     result = conn.execute(
         """SELECT id, study_plan_version, concordance_index, lr_test_p,
-                  sample_counts_json, status_json
+                  sample_counts_json, status_json, ph_diagnostics_json
            FROM analysis_results
            WHERE study_id=? AND test_name='cox_ph_model'
              AND id NOT IN (
@@ -180,8 +184,30 @@ def load_forest_data(study_id: str) -> ForestPlotData:
     )
 
 
-def _svg_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def _populate_violation(data: ForestPlotData, result_row: dict) -> ForestPlotData:
+    """Add post-unmask violation info from result row to ForestPlotData.
+    Also marks individual CovariateRow.violated for matched Schoenfeld violations."""
+    has_viol, summary, details = check_violation(result_row)
+    data.violation_warning = has_viol
+    data.violation_summary = summary
+    if has_viol:
+        ph_raw = result_row.get("ph_diagnostics_json")
+        if ph_raw:
+            import json
+            ph = json.loads(ph_raw) if isinstance(ph_raw, str) else ph_raw
+            violated_bases: list[str] = []
+            for cov in ph.get("covariates", []):
+                p = cov.get("p_value", 1)
+                if p < 0.05:
+                    name = cov.get("covariate", "")
+                    # Strip lifelines' [T.level] suffix for matching
+                    base = name.split("[")[0].strip()
+                    violated_bases.append(base)
+            for cv in data.covariates:
+                if cv.covariate in violated_bases:
+                    cv.violated = True
+    return data
+
 
 
 # ── SVG renderer ─────────────────────────────────────────────────────────────
@@ -224,10 +250,11 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     if lo <= 0:
         lo = 0.1
 
+    svg_header = f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" ' \
+                 f'font-family="Arial, Helvetica, sans-serif" font-size="13">'
+
     parts: list[str] = []
-    parts.append(f'<svg xmlns="http://www.w3.org/2000/svg" '
-                 f'width="{svg_w}" height="{svg_h}" '
-                 f'font-family="Arial, Helvetica, sans-serif" font-size="13">')
+
     parts.append(f'  <text x="{margin_l}" y="24" font-size="16" font-weight="bold" '
                  f'fill="#1F4E78">Forest Plot — Cox PH Model</text>')
 
@@ -267,8 +294,11 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     for i, cov in enumerate(data.covariates):
         y = margin_t + i * row_h + row_h // 2 + 10
 
+        use_grey = cov.violated
+        label_color = "#888" if use_grey else "#333"
+
         # Covariate label (left column)
-        parts.append(f'  <text x="{margin_l}" y="{y + 4}" font-size="12" fill="#333">'
+        parts.append(f'  <text x="{margin_l}" y="{y + 4}" font-size="12" fill="{label_color}">'
                      f'{_svg_escape(cov.display_label)}</text>')
 
         if cov.unstable:
@@ -294,23 +324,34 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
 
         # Point estimate marker
         hx = _log_scale_x(cov.hr, lo, hi, plot_w) + plot_l
-        marker_size = 5
-        parts.append(f'  <rect x="{hx - marker_size}" y="{y - marker_size}" '
-                     f'width="{marker_size * 2}" height="{marker_size * 2}" '
-                     f'fill="{color}" />')
+        if use_grey:
+            # Hollow diamond for violated covariates
+            d = 6  # half-size
+            parts.append(f'  <polygon points="{hx},{y - d} {hx + d},{y} {hx},{y + d} {hx - d},{y}" '
+                         f'fill="white" stroke="{color}" stroke-width="2" />')
+        else:
+            marker_size = 5
+            parts.append(f'  <rect x="{hx - marker_size}" y="{y - marker_size}" '
+                         f'width="{marker_size * 2}" height="{marker_size * 2}" '
+                         f'fill="{color}" />')
 
-        # Text: HR [CI], p-value
+        # Text: HR [CI], p-value — single element with proper offsets
         hr_str = f"{cov.hr:.2f}"
         ci_str = f"[{cov.ci_lower:.2f}, {cov.ci_upper:.2f}]"
-        p_str = f"p={cov.wald_p:.3f}"
+        p_str = f"p = {cov.wald_p:.3f}"
         txt_x = plot_l + plot_w + 10
-        parts.append(f'  <text x="{txt_x}" y="{y + 4}" font-size="11" fill="#333">'
+        txt_color = "#888" if use_grey else "#333"
+        parts.append(f'  <text x="{txt_x}" y="{y + 4}" font-size="11" fill="{txt_color}">'
                      f'{hr_str} {ci_str}</text>')
-        parts.append(f'  <text x="{txt_x + 80}" y="{y + 4}" font-size="11" '
-                     f'fill="#555">{p_str}</text>')
+        # Estimate p-value text width as ~6.5px per character at font-size 11
+        ci_width = len(f"{hr_str} {ci_str}") * 6.5
+        parts.append(f'  <text x="{txt_x + ci_width + 4}" y="{y + 4}" font-size="11" '
+                     f'fill="{txt_color}">{p_str}</text>')
 
     # Footer: model summary
     footer_y = margin_t + plot_h + 40
+    footer_lines = 0
+
     summary_parts = []
     if data.concordance_index is not None:
         summary_parts.append(f"C-index={data.concordance_index:.3f}")
@@ -321,18 +362,46 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     summary_str = " | ".join(summary_parts)
     parts.append(f'  <text x="{margin_l}" y="{footer_y}" font-size="11" fill="#555">'
                  f'{_svg_escape(summary_str)}</text>')
+    footer_lines += 1
 
     # aHR footnote
     parts.append(f'  <text x="{margin_l}" y="{footer_y + 18}" font-size="10" fill="#555" '
                  f'font-style="italic">aHR = adjusted Hazard Ratio (multivariable Cox model)</text>')
+    footer_lines += 1
 
     # EPV caveat
+    epv_y = footer_y + 30
     if data.epv_warning and data.epv is not None:
-        parts.append(f'  <text x="{margin_l}" y="{footer_y + 32}" font-size="11" '
+        parts.append(f'  <text x="{margin_l}" y="{epv_y}" font-size="11" '
                      f'fill="#C0392B" font-weight="bold">'
                      f'⚠ Caution: EPV={data.epv:.1f}, below recommended threshold '
                      f'— estimates may be unstable.</text>')
+        epv_y += 16
+        footer_lines += 1
 
+    # Post-unmask violation annotation + legend
+    if data.violation_warning and data.violation_summary:
+        parts.append(f'  <text x="{margin_l}" y="{epv_y}" font-size="11" '
+                     f'fill="#C0392B" font-weight="bold">'
+                     f'⚠ Assumption violation: {_svg_escape(data.violation_summary)}</text>')
+        epv_y += 16
+        footer_lines += 1
+        has_marked = any(c.violated for c in data.covariates)
+        if has_marked:
+            parts.append(f'  <text x="{margin_l}" y="{epv_y}" font-size="10" '
+                         f'fill="#888">'
+                         f'◇ = assumption violation detected for this covariate</text>')
+            epv_y += 16
+            footer_lines += 1
+
+    # Resize canvas if footer overflowed the original margin_b
+    needed_footer_h = 20 + footer_lines * 18
+    if needed_footer_h > margin_b:
+        svg_h = margin_t + plot_h + needed_footer_h
+        svg_header = f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" ' \
+                     f'font-family="Arial, Helvetica, sans-serif" font-size="13">'
+
+    parts.insert(0, svg_header)
     parts.append("</svg>")
     Path(output_path).write_text("\n".join(parts))
 
@@ -463,5 +532,24 @@ def render_forest(study_id: str, output_path: str | None = None, ascii: bool = F
     if ascii:
         return render_ascii(data)
     path = output_path or str(DATA_ROOT / study_id / "forest_plot.svg")
+    # Re-read the result row to pass status_json + ph_diagnostics_json to violation check
+    conn = get_connection(study_id)
+    init_db(conn)
+    row = conn.execute(
+        """SELECT status_json, ph_diagnostics_json
+           FROM analysis_results
+           WHERE study_id=? AND test_name='cox_ph_model'
+             AND id NOT IN (
+               SELECT COALESCE(superseded_previous_result_id, -1)
+               FROM analysis_results
+               WHERE study_id=? AND test_name='cox_ph_model'
+                 AND superseded_previous_result_id IS NOT NULL
+             )
+           ORDER BY id DESC LIMIT 1""",
+        (study_id, study_id),
+    ).fetchone()
+    conn.close()
+    if row:
+        data = _populate_violation(data, dict(row))
     render_svg(data, path)
     return Path(path)

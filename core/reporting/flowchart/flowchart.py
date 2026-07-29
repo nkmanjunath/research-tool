@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.database import DATA_ROOT, get_connection
+from core.reporting import (
+    format_label as _format_label,
+    latest_locked_plan as _latest_locked_plan,
+    svg_escape as _svg_escape,
+)
 
 
 @dataclass
@@ -34,29 +39,9 @@ def _find_duplicate_patient_ids(study_id: str) -> list[tuple[str, int]]:
     return find_duplicate_patient_ids(study_id)
 
 
-_ACRONYMS = frozenset({"PFS", "OS", "HR", "CI", "DFS", "ORR", "CR", "PR", "SD", "PD",
-                        "ISS", "ECOG", "LDH", "BMI", "IQR", "KM", "PH"})
-
-
-def _format_label(raw: str) -> str:
-    """Acronym-aware label: pfs_multivariable → Pfs Multivariable → PFS Multivariable."""
-    parts = raw.replace("_", " ").split()
-    out: list[str] = []
-    for p in parts:
-        upper = p.upper()
-        if upper in _ACRONYMS:
-            out.append(upper)
-        else:
-            out.append(p[0].upper() + p[1:] if p else p)
-    return " ".join(out)
-
 
 def _get_plan_event_col(study_id: str) -> str | None:
-    study_dir = DATA_ROOT / study_id
-    plan_path = study_dir / "study_plan.v1.locked.json"
-    if not plan_path.exists():
-        return None
-    plan = json.loads(plan_path.read_text())
+    plan = _latest_locked_plan(study_id)
     cox_models = plan.get("cox_ph_models", [])
     if cox_models:
         return cox_models[0].get("event_col")
@@ -64,11 +49,7 @@ def _get_plan_event_col(study_id: str) -> str | None:
 
 
 def _get_plan_arm_col(study_id: str) -> str | None:
-    study_dir = DATA_ROOT / study_id
-    plan_path = study_dir / "study_plan.v1.locked.json"
-    if not plan_path.exists():
-        return None
-    plan = json.loads(plan_path.read_text())
+    plan = _latest_locked_plan(study_id)
     cox_models = plan.get("cox_ph_models", [])
     if cox_models:
         return cox_models[0].get("primary_treatment_col")
@@ -141,19 +122,18 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
     # Stage 5: Analyzed
     # Determine primary analysis label from plan
     primary_analysis_label = "Cox PH model"  # default for cox_ph_model analysis
-    plan_path = DATA_ROOT / study_id / "study_plan.v1.locked.json"
-    if plan_path.exists():
+    plan = _latest_locked_plan(study_id)
+    if plan:
         try:
-            plan = json.loads(plan_path.read_text())
             cox_models = plan.get("cox_ph_models", [])
             if cox_models:
                 mn = cox_models[0].get("model_name") or ""
                 if mn:
                     primary_analysis_label = _format_label(mn)
             else:
-                planned_tests = plan.get("planned_tests", [])
-                if planned_tests:
-                    tn = planned_tests[0].get("test_name", "")
+                all_tests = plan.get("planned_tests", []) + plan.get("post_hoc_tests", [])
+                if all_tests:
+                    tn = all_tests[0].get("test_name", "")
                     if tn:
                         primary_analysis_label = _format_label(tn)
         except Exception:
@@ -190,10 +170,9 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
     # Per-arm analyzed counts: rows where all Cox model columns are non-null
     arm_analyzed_counts: dict[str, int] = {}
     if arm_col and analyzed_n > 0:
-        plan_path = DATA_ROOT / study_id / "study_plan.v1.locked.json"
+        plan = _latest_locked_plan(study_id)
         cox_cols = [arm_col]
         try:
-            plan = json.loads(plan_path.read_text())
             m = plan.get("cox_ph_models", [{}])[0]
             if m.get("survival_time_col"):
                 cox_cols.append(m["survival_time_col"])
@@ -242,8 +221,6 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
 
 # ── SVG renderer ─────────────────────────────────────────────────────────────
 
-def _svg_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _draw_box(parts: list, x: int, y: int, w: int, h: int,
@@ -331,7 +308,10 @@ def render_svg(data: FlowchartData, output_path: str,
     arm_cx = [x + arm_w // 2 for x in arm_xs]
 
     # Enrollment centered on arm midpoint, exclusion overflows right
-    main_cx = (arm_cx[0] + arm_cx[-1]) // 2
+    if has_arms:
+        main_cx = (arm_cx[0] + arm_cx[-1]) // 2
+    else:
+        main_cx = svg_w // 2
     main_x = main_cx - main_w // 2
     excl_x = main_x + main_w + hgap
 
