@@ -45,8 +45,9 @@ def _format_analysis_result(a, covariate_rows: list[dict] | None = None) -> str:
             rationale_suffix = f" — {r}"
     es = json.loads(a["effect_size_json"]) if a["effect_size_json"] else None
     es_str = f" ({es['metric']}={es['value']:.3f})" if es else ""
+    display_test = a['test_name'].replace("_", " ").title()
     lines = [
-        f"**Test:** {a['test_name']}{rationale_suffix}{tag}\n",
+        f"**Test:** {display_test}{rationale_suffix}{tag}\n",
     ]
     if reason_line:
         lines.append(reason_line)
@@ -359,13 +360,17 @@ def generate_draft(study_id: str) -> str:
         f"Analysis included {n_pre_reg} pre-registered test"
         f"{'s' if n_pre_reg != 1 else ''}.\n\n"
         f"**Results:** {results_line}\n\n"
-        f"**Conclusions:** [To be completed based on results]"
+        f"**Conclusions:** [Summarize main findings and their clinical "
+        f"implications. Per STROBE Item 18, discuss limitations and "
+        f"generalizability.]"
     )
 
     # ── Introduction ────────────────────────────────────────────────────────
     introduction = (
         "## Introduction\n\n"
-        "**Background:** [Scientific background to be provided by author]\n\n"
+        "**Background:** [Provide scientific context: what is known about the "
+        "exposure-outcome relationship, and what gap this study addresses. "
+        "Per STROBE Item 3, state specific objectives/hypotheses.]\n\n"
         "**Objective:** This study aimed to test the association described in "
         "the locked study plan.\n\n"
     )
@@ -377,17 +382,30 @@ def generate_draft(study_id: str) -> str:
     if locked_plans:
         import json
         plan_data = json.loads(locked_plans[-1].read_text())
+
+        # Build ID→name lookup from variables table (§9 fix: show names not IDs)
+        var_lookup = {v["id"]: v["column_name"] for v in variables}
+
+        outcome_ids = plan_data.get("primary_outcome_variable_ids", [])
+        outcome_names = [var_lookup.get(vid, str(vid)) for vid in outcome_ids]
+        covariate_ids = plan_data.get("covariates", [])
+        covariate_names = [var_lookup.get(vid, str(vid)) for vid in covariate_ids]
+
         plan_section = (
             f"**Study design:** {plan_data.get('study_type', 'cohort').replace('_', ' ')}\n\n"
             f"**Primary comparison:** {plan_data.get('primary_comparison', 'Not specified')}\n\n"
-            f"**Primary outcome variable IDs:** "
-            f"{', '.join(str(x) for x in plan_data.get('primary_outcome_variable_ids', []))}\n\n"
+            f"**Primary outcome:** "
+            f"{', '.join(outcome_names) or 'Not specified'}\n\n"
             f"**Covariates:** "
-            f"{', '.join(str(x) for x in plan_data.get('covariates', [])) or 'None'}\n\n"
+            f"{', '.join(covariate_names) or 'None'}\n\n"
             f"**Pre-registered tests:**\n"
         )
         for t in plan_data.get("planned_tests", []):
-            plan_section += f"  - {t.get('test_name', 'Unknown')}: {t.get('rationale', '')}\n"
+            test_name = t.get("test_name", "Unknown")
+            display_name = test_name.replace("_", " ").title()
+            rationale = t.get("rationale", "")
+            rationale_str = f": {rationale}" if rationale else ""
+            plan_section += f"  - {display_name}{rationale_str}\n"
 
     methods = (
         "## Methods\n\n"
@@ -519,8 +537,12 @@ def generate_draft(study_id: str) -> str:
         "## Discussion\n\n"
         f"{key_results}"
         f"{limitations_section}"
-        "**Interpretation:** [Cautious overall interpretation]\n\n"
-        "**Generalisability:** [Discuss external validity]\n\n"
+        "**Interpretation:** [Discuss the principal results in context of "
+        "existing evidence. Per STROBE Item 20, consider mechanisms, "
+        "external validity, and implications for clinical practice.]\n\n"
+        "**Generalisability:** [Discuss the external validity of the findings. "
+        "Per STROBE Item 21, address the generalizability to other populations, "
+        "settings, and time periods.]\n\n"
     )
 
     # ── Other Information ──────────────────────────────────────────────────
