@@ -77,6 +77,12 @@ def _cascade_clear(study_id: str) -> None:
 
     masked = f"raw_masked_{study_id}"
     conn.execute(f"DROP TABLE IF EXISTS {masked}")
+    # M1 fix: delete child table before parent to avoid FK violation
+    conn.execute(
+        "DELETE FROM analysis_covariate_results WHERE result_id IN "
+        "(SELECT id FROM analysis_results WHERE study_id=?)",
+        (study_id,),
+    )
     conn.execute("DELETE FROM analysis_results WHERE study_id=?", (study_id,))
     conn.execute("DELETE FROM variables WHERE study_id=?", (study_id,))
 
