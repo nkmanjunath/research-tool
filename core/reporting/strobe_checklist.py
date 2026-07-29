@@ -19,16 +19,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from core.database import get_connection, DATA_ROOT
-
-
-def _filter_superseded(rows: list) -> list:
-    """Remove superseded analysis results (those replaced by a --rerun)."""
-    superseded_ids = {
-        r["superseded_previous_result_id"]
-        for r in rows
-        if r["superseded_previous_result_id"] is not None
-    }
-    return [r for r in rows if r["id"] not in superseded_ids]
+from core.reporting import filter_superseded as _filter_superseded
 
 # ── Draft section heading mapping ──────────────────────────────────────
 SECTION_HEADINGS = {
@@ -326,6 +317,23 @@ def _check_item(
     elif item.item_id == "12a":
         item.satisfied = len(analyses) > 0
         item.evidence = f"{len(analyses)} analyses recorded"
+    elif item.item_id == "12b":
+        from core.planning.diagnostics import check_violation
+        violations: list[str] = []
+        for a in analyses:
+            has_v, summary, _ = check_violation(dict(a))
+            if has_v:
+                violations.append(f"{a['test_name']}: {summary}")
+        if violations:
+            item.satisfied = False
+            item.evidence = (
+                f"Post-unmask diagnostic violation(s) detected in "
+                f"{len(violations)} analysis(es): {'; '.join(violations)}. "
+                f"Subgroup/interaction methods should address these violations."
+            )
+        else:
+            item.satisfied = True
+            item.evidence = "No post-unmask diagnostic violations detected across analyses"
     elif item.item_id == "14a":
         n_baseline = sum(1 for v in variables if v["role"] == "baseline")
         item.satisfied = n_baseline > 0

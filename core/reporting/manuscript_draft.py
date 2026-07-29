@@ -11,7 +11,9 @@ import json
 from pathlib import Path
 
 from core.database import get_connection, DATA_ROOT
+from core.planning.diagnostics import check_violation
 from core.reporting.strobe_checklist import check_study
+from core.reporting import filter_superseded as _filter_superseded
 
 
 def _json_field(row, field: str) -> dict:
@@ -24,20 +26,6 @@ def _json_field(row, field: str) -> dict:
     except (TypeError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
-
-
-def _filter_superseded(rows: list) -> list:
-    """Remove superseded analysis results (those replaced by a --rerun).
-
-    A result is superseded if its ``id`` appears as another row's
-    ``superseded_previous_result_id``.
-    """
-    superseded_ids = {
-        r["superseded_previous_result_id"]
-        for r in rows
-        if r["superseded_previous_result_id"] is not None
-    }
-    return [r for r in rows if r["id"] not in superseded_ids]
 
 
 def _format_analysis_result(a, covariate_rows: list[dict] | None = None) -> str:
@@ -105,10 +93,17 @@ def generate_key_results(analyses) -> str:
     if not pre_reg:
         return "**Key results:** No pre-registered tests were completed."
     statuses = [_json_field(a, "status_json").get("status", "completed") for a in pre_reg]
-    n_completed = statuses.count("completed")
+    n_clean = statuses.count("completed")
+    n_violated = statuses.count("assumption_violation")
     n_skipped = statuses.count("skipped_assumption_violation")
-    n_errors = len(statuses) - n_completed - n_skipped
-    parts = [f"Of {len(statuses)} pre-registered test(s), {n_completed} completed successfully"]
+    n_errors = len(statuses) - n_clean - n_violated - n_skipped
+    parts = [f"Of {len(statuses)} pre-registered test(s), {n_clean} completed successfully"]
+    if n_violated:
+        parts.append(
+            f"{n_violated} {'was' if n_violated == 1 else 'were'} completed "
+            f"with {'an' if n_violated == 1 else ''} assumption violation{'s' if n_violated != 1 else ''} "
+            f"noted"
+        )
     if n_skipped:
         parts.append(
             f"{n_skipped} {'was' if n_skipped == 1 else 'were'} skipped due to "
@@ -201,14 +196,27 @@ def generate_limitations(study_id: str) -> str:
                 f"this comparison should be considered exploratory only."
             )
 
+    # 4. Completed-but-violated tests (post-unmask diagnostics)
+    for a in analyses:
+        has_viol, summary, details = check_violation(dict(a))
+        if has_viol:
+            limitations.append(
+                f"The {a['test_name']} model completed but violated "
+                f"{'its' if len(details) == 1 else 'multiple'} post-unmask "
+                f"assumption check{'s' if len(details) != 1 else ''}: "
+                f"{summary}. "
+                f"The reported estimates should be interpreted with this caveat."
+            )
+
     # 4. Forced tests (ran despite warnings). Match warnings to the planned
     # test's variable rather than searching the test name for that variable.
     for a in analyses:
         status_data = json.loads(a["status_json"]) if a["status_json"] else {}
-        if status_data.get("status") == "completed":
+        if status_data.get("status") in ("completed", "assumption_violation"):
             if plan_data:
+                all_tests = plan_data.get("planned_tests", []) + plan_data.get("post_hoc_tests", [])
                 planned = [
-                    t for t in plan_data.get("planned_tests", [])
+                    t for t in all_tests
                     if t.get("test_name") == a["test_name"]
                 ]
                 for planned_test in planned:
@@ -228,8 +236,9 @@ def generate_limitations(study_id: str) -> str:
     for a in analyses:
         if a["test_name"] in ("cox_proportional_hazards", "cox_ph_model"):
             sc = json.loads(a["sample_counts_json"]) if a["sample_counts_json"] else {}
+            all_tests = (plan_data or {}).get("planned_tests", []) + (plan_data or {}).get("post_hoc_tests", [])
             planned = next((
-                t for t in (plan_data or {}).get("planned_tests", [])
+                t for t in all_tests
                 if t.get("test_name") == a["test_name"]
             ), None)
             n_events = sc.get("n_events")
