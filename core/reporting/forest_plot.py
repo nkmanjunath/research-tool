@@ -240,13 +240,13 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     plot_h = max(n * row_h, 60)
     svg_h = margin_t + plot_h + margin_b
 
-    # Determine log range: include all CIs and HR=1
+    # Determine log range: include all CIs and HR=1, with padding for x-axis ticks
     all_vals = [1.0]
     for c in data.covariates:
         if not c.unstable:
             all_vals.extend([c.hr, c.ci_lower, c.ci_upper])
-    lo = min(all_vals) / 1.3
-    hi = max(all_vals) * 1.3
+    lo = min(all_vals) / 1.5
+    hi = max(all_vals) * 2.0
     if lo <= 0:
         lo = 0.1
 
@@ -258,12 +258,10 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     parts.append(f'  <text x="{margin_l}" y="24" font-size="16" font-weight="bold" '
                  f'fill="#1F4E78">Forest Plot — Cox PH Model</text>')
 
-    # Header row
-    header_y = margin_t - 10
+    # Header row — moved down to avoid overlap with title (§9 fix)
+    header_y = margin_t
     parts.append(f'  <text x="{margin_l}" y="{header_y}" font-size="11" '
                  f'font-weight="bold" fill="#555">Covariate</text>')
-    parts.append(f'  <text x="{plot_l + plot_w // 2}" y="{header_y}" font-size="11" '
-                 f'font-weight="bold" fill="#555" text-anchor="middle">aHR [95% CI]</text>')
     parts.append(f'  <text x="{plot_l + plot_w + 10}" y="{header_y}" font-size="11" '
                  f'font-weight="bold" fill="#555">aHR [95% CI]</text>')
     parts.append(f'  <text x="{plot_l + plot_w + 10}" y="{header_y + 14}" font-size="11" '
@@ -280,7 +278,7 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     ax_y = margin_t + plot_h + 5
     parts.append(f'  <line x1="{plot_l}" y1="{ax_y}" x2="{plot_l + plot_w}" y2="{ax_y}" '
                  f'stroke="#333" stroke-width="1" />')
-    # Tick labels for x-axis (HR values)
+    # Tick labels for x-axis (HR values) — extend past 1.0 (§9 fix)
     tick_vals = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
     tick_vals = [v for v in tick_vals if lo <= v <= hi]
     for tv in tick_vals:
@@ -335,9 +333,9 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
                          f'width="{marker_size * 2}" height="{marker_size * 2}" '
                          f'fill="{color}" />')
 
-        # Text: HR [CI], p-value — single element with proper offsets
-        hr_str = f"{cov.hr:.2f}"
-        ci_str = f"[{cov.ci_lower:.2f}, {cov.ci_upper:.2f}]"
+        # Text: HR [CI], p-value — 3dp to avoid hiding CI crossing 1.0 (§9 fix)
+        hr_str = f"{cov.hr:.3f}"
+        ci_str = f"[{cov.ci_lower:.3f}, {cov.ci_upper:.3f}]"
         p_str = f"p = {cov.wald_p:.3f}"
         txt_x = plot_l + plot_w + 10
         txt_color = "#888" if use_grey else "#333"
@@ -394,8 +392,9 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
             epv_y += 16
             footer_lines += 1
 
-    # Resize canvas if footer overflowed the original margin_b
-    needed_footer_h = 20 + footer_lines * 18
+    # Resize canvas if footer overflowed the original margin_b (§9 fix)
+    # Use epv_y (last text y-position) + descender + padding instead of line count
+    needed_footer_h = epv_y - (margin_t + plot_h) + 20
     if needed_footer_h > margin_b:
         svg_h = margin_t + plot_h + needed_footer_h
         svg_header = f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" ' \
