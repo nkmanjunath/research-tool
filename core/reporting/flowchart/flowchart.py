@@ -28,6 +28,7 @@ class FlowchartData:
     study_id: str
     stages: list[FlowStage]
     study_name: str = ""
+    study_type: str = ""
     arm_column: str | None = None
     arm_counts: dict[str, int] = field(default_factory=dict)
     arm_analyzed_counts: dict[str, int] = field(default_factory=dict)
@@ -61,9 +62,11 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
     raw = f"raw_{study_id}"
 
     study_name = ""
-    row = conn.execute("SELECT name FROM studies WHERE id=?", (study_id,)).fetchone()
+    study_type = ""
+    row = conn.execute("SELECT name, study_type FROM studies WHERE id=?", (study_id,)).fetchone()
     if row:
-        study_name = row[0]
+        study_name = row[0] or ""
+        study_type = row[1] or ""
 
     stages: list[FlowStage] = []
 
@@ -121,21 +124,23 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
 
     # Stage 5: Analyzed
     # Determine primary analysis label from plan
-    primary_analysis_label = "Cox PH model"  # default for cox_ph_model analysis
+    primary_analysis_label = "Primary Endpoints"
     plan = _latest_locked_plan(study_id)
     if plan:
         try:
             cox_models = plan.get("cox_ph_models", [])
             if cox_models:
                 mn = cox_models[0].get("model_name") or ""
-                if mn:
-                    primary_analysis_label = _format_label(mn)
+                if mn and mn.lower() not in ("pfs_multivariable", "cox_ph_model", "pfs_model"):
+                    primary_analysis_label = f"Primary Endpoints ({_format_label(mn)})"
+                else:
+                    primary_analysis_label = "Primary Endpoints"
             else:
                 all_tests = plan.get("planned_tests", []) + plan.get("post_hoc_tests", [])
                 if all_tests:
                     tn = all_tests[0].get("test_name", "")
                     if tn:
-                        primary_analysis_label = _format_label(tn)
+                        primary_analysis_label = f"Primary Endpoints ({_format_label(tn)})"
         except Exception:
             pass
 
@@ -212,6 +217,7 @@ def load_flowchart_data(study_id: str) -> FlowchartData:
         study_id=study_id,
         stages=stages,
         study_name=study_name,
+        study_type=study_type,
         arm_column=arm_col,
         arm_counts=arm_counts,
         arm_analyzed_counts=arm_analyzed_counts,
@@ -275,7 +281,7 @@ def render_svg(data: FlowchartData, output_path: str,
     vgap = 30
     hgap = 25
     col_gap = 35
-    pill_w = 95
+    pill_w = 125
     pill_h = 22
     pill_x = 8
     header_h = 80
@@ -338,17 +344,27 @@ def render_svg(data: FlowchartData, output_path: str,
                  f'font-family="Arial, Helvetica, sans-serif" font-size="13">')
 
     # ── Title ──────────────────────────────────────────────────────────
+    # CONSORT for RCTs, STROBE for observational studies
+    if data.study_type == "rct":
+        flow_label = "CONSORT Participant Flow Diagram"
+    else:
+        flow_label = "STROBE Participant Flow Diagram"
     if show_title:
-        _draw_text(parts, main_cx, margin + 22, "CONSORT Participant Flow Diagram",
+        _draw_text(parts, main_cx, margin + 22, flow_label,
                    18, "#1F4E78", bold=True, anchor="middle")
         if show_study_name and data.study_name:
             _draw_text(parts, main_cx, margin + 40, data.study_name,
                        12, "#777", italic=True, anchor="middle")
 
-    # Phase pills (left margin)
-    _draw_pill(parts, pill_x, pill_enroll_y, pill_w, pill_h, "ENROLLMENT")
-    _draw_pill(parts, pill_x, pill_alloc_y, pill_w, pill_h, "ALLOCATION")
-    _draw_pill(parts, pill_x, pill_analy_y, pill_w, pill_h, "ANALYSIS")
+    # Phase pills (left margin) — CONSORT for RCTs, STROBE for observational
+    if data.study_type == "rct":
+        _draw_pill(parts, pill_x, pill_enroll_y, pill_w, pill_h, "ENROLLMENT")
+        _draw_pill(parts, pill_x, pill_alloc_y, pill_w, pill_h, "ALLOCATION")
+        _draw_pill(parts, pill_x, pill_analy_y, pill_w, pill_h, "ANALYSIS")
+    else:
+        _draw_pill(parts, pill_x, pill_enroll_y, pill_w, pill_h, "ELIGIBILITY")
+        _draw_pill(parts, pill_x, pill_alloc_y, pill_w, pill_h, "COHORT ASSIGNMENT")
+        _draw_pill(parts, pill_x, pill_analy_y, pill_w, pill_h, "ANALYSIS")
 
     # ═══════════════════════════════════════════════════════════════════
     # Stage 0: Enrollment (assessed + eligible merged — no exclusion here)

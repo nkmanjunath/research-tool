@@ -13,6 +13,20 @@ from core.planning.diagnostics import check_violation
 from core.reporting import latest_locked_plan as _latest_locked_plan, svg_escape as _svg_escape
 
 
+COVARIATE_LABEL_MAP = {
+    "treatment_arm": "Treatment Group",
+    "high_risk_fish": "High-Risk Cytogenetics",
+    "prior_lines": "Prior Lines of Therapy",
+    "age": "Age, years",
+    "iss_stage": "ISS Stage",
+}
+
+COVARIATE_UNIT_MAP = {
+    "prior_lines": "Per additional line",
+    "age": "Per year increase",
+}
+
+
 @dataclass
 class CovariateRow:
     covariate: str
@@ -34,11 +48,15 @@ class CovariateRow:
 
     @property
     def display_label(self) -> str:
+        base_name = COVARIATE_LABEL_MAP.get(self.covariate, self.covariate.replace("_", " ").title())
         if self.reference_level is not None and self.tested_level is not None:
-            return f"{self.covariate} ({self.tested_level} vs {self.reference_level})"
+            ref_str = str(self.reference_level).capitalize() if str(self.reference_level).lower() in ("yes", "no") else str(self.reference_level)
+            test_str = str(self.tested_level).capitalize() if str(self.tested_level).lower() in ("yes", "no") else str(self.tested_level)
+            return f"{base_name} ({test_str} vs {ref_str})"
         if " (interaction)" in self.covariate:
             return self.covariate
-        return f"{self.covariate} (per 1-unit increase)"
+        unit_str = COVARIATE_UNIT_MAP.get(self.covariate, "per 1-unit increase")
+        return f"{base_name} ({unit_str})"
 
 
 @dataclass
@@ -225,17 +243,19 @@ SVG_TPL = """<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}"
 
 
 def render_svg(data: ForestPlotData, output_path: str) -> None:
-    margin_l = 180
+    margin_l = 20
     margin_r = 30
     margin_t = 40
     margin_b = 80
-    plot_l = margin_l + 20
+    label_w = 280
+    plot_l = margin_l + label_w + 20  # 320
     plot_w = 400
     row_h = 36
-    label_w = plot_l - margin_l - 10
-    text_col_w = 200
+    txt_x = plot_l + plot_w + 20       # 740
+    p_col_offset = 190                 # 930 for p-value column
+    text_col_w = 270
 
-    svg_w = plot_l + plot_w + text_col_w + margin_r
+    svg_w = txt_x + text_col_w + margin_r  # 1040
     n = len(data.covariates)
     plot_h = max(n * row_h, 60)
     svg_h = margin_t + plot_h + margin_b
@@ -245,10 +265,13 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     for c in data.covariates:
         if not c.unstable:
             all_vals.extend([c.hr, c.ci_lower, c.ci_upper])
-    lo = min(all_vals) / 1.5
-    hi = max(all_vals) * 2.0
+    min_v = min(all_vals)
+    max_v = max(all_vals)
+
+    lo = min(0.04 if min_v < 0.1 else 0.08, min_v / 1.5)
+    hi = max(15.0 if max_v > 8.0 else 12.0, max_v * 1.5)
     if lo <= 0:
-        lo = 0.1
+        lo = 0.04
 
     svg_header = f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" ' \
                  f'font-family="Arial, Helvetica, sans-serif" font-size="13">'
@@ -258,13 +281,13 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     parts.append(f'  <text x="{margin_l}" y="24" font-size="16" font-weight="bold" '
                  f'fill="#1F4E78">Forest Plot — Cox PH Model</text>')
 
-    # Header row — moved down to avoid overlap with title (§9 fix)
+    # Header row — side-by-side column headers aligned with data columns
     header_y = margin_t
     parts.append(f'  <text x="{margin_l}" y="{header_y}" font-size="11" '
                  f'font-weight="bold" fill="#555">Covariate</text>')
-    parts.append(f'  <text x="{plot_l + plot_w + 10}" y="{header_y}" font-size="11" '
+    parts.append(f'  <text x="{txt_x}" y="{header_y}" font-size="11" '
                  f'font-weight="bold" fill="#555">aHR [95% CI]</text>')
-    parts.append(f'  <text x="{plot_l + plot_w + 10}" y="{header_y + 14}" font-size="11" '
+    parts.append(f'  <text x="{txt_x + p_col_offset}" y="{header_y}" font-size="11" '
                  f'font-weight="bold" fill="#555">p-value</text>')
 
     # Horizontal reference line at HR=1
@@ -278,8 +301,8 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
     ax_y = margin_t + plot_h + 5
     parts.append(f'  <line x1="{plot_l}" y1="{ax_y}" x2="{plot_l + plot_w}" y2="{ax_y}" '
                  f'stroke="#333" stroke-width="1" />')
-    # Tick labels for x-axis (HR values) — extend past 1.0 (§9 fix)
-    tick_vals = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0]
+    # Tick labels for x-axis (HR values) — include 0.05 and 15.0
+    tick_vals = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0]
     tick_vals = [v for v in tick_vals if lo <= v <= hi]
     for tv in tick_vals:
         tx = _log_scale_x(tv, lo, hi, plot_w) + plot_l
@@ -337,13 +360,10 @@ def render_svg(data: ForestPlotData, output_path: str) -> None:
         hr_str = f"{cov.hr:.3f}"
         ci_str = f"[{cov.ci_lower:.3f}, {cov.ci_upper:.3f}]"
         p_str = f"p = {cov.wald_p:.3f}"
-        txt_x = plot_l + plot_w + 10
         txt_color = "#888" if use_grey else "#333"
         parts.append(f'  <text x="{txt_x}" y="{y + 4}" font-size="11" fill="{txt_color}">'
                      f'{hr_str} {ci_str}</text>')
-        # Estimate p-value text width as ~6.5px per character at font-size 11
-        ci_width = len(f"{hr_str} {ci_str}") * 6.5
-        parts.append(f'  <text x="{txt_x + ci_width + 4}" y="{y + 4}" font-size="11" '
+        parts.append(f'  <text x="{txt_x + p_col_offset}" y="{y + 4}" font-size="11" '
                      f'fill="{txt_color}">{p_str}</text>')
 
     # Footer: model summary
@@ -552,3 +572,56 @@ def render_forest(study_id: str, output_path: str | None = None, ascii: bool = F
         data = _populate_violation(data, dict(row))
     render_svg(data, path)
     return Path(path)
+
+
+def generate_forest_plot_png(study_id: str, output_path: str | Path | None = None) -> Path:
+    """Render a publication-ready PNG forest plot using matplotlib."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    data = load_forest_data(study_id)
+    if output_path is None:
+        output_path = DATA_ROOT / study_id / "forest_plot.png"
+    else:
+        output_path = Path(output_path)
+
+    fig, ax = plt.subplots(figsize=(10, 4.5), dpi=150)
+    fig.subplots_adjust(left=0.32, right=0.62, top=0.85, bottom=0.2)
+
+    n = len(data.covariates)
+    y_positions = np.arange(n, 0, -1)
+
+    for i, cov in enumerate(data.covariates):
+        y = y_positions[i]
+        color = "#888888" if cov.ci_crosses_one else "#1F4E78"
+
+        err_low = max(0, cov.hr - cov.ci_lower)
+        err_high = max(0, cov.ci_upper - cov.hr)
+        ax.errorbar(
+            cov.hr, y, xerr=[[err_low], [err_high]],
+            fmt="s", color=color, ecolor=color, elinewidth=2, capsize=4, capthick=1.5, markersize=6,
+        )
+
+        ax.text(-0.03, y, cov.display_label, transform=ax.get_yaxis_transform(), ha="right", va="center", fontsize=11)
+
+        hr_str = f"{cov.hr:.2f} [{cov.ci_lower:.2f}, {cov.ci_upper:.2f}]"
+        p_str = f"p = {cov.wald_p:.3f}" if cov.wald_p >= 0.001 else "p < 0.001"
+        ax.text(1.03, y, hr_str, transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=11)
+        ax.text(1.55, y, p_str, transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=11)
+
+    ax.set_xscale("log")
+    ax.axvline(1.0, color="#999999", linestyle="--", linewidth=1.5)
+    ax.set_yticks([])
+    ax.set_ylim(0.5, n + 0.8)
+    ax.set_xlabel("Hazard Ratio (log scale)", fontsize=11)
+    ax.set_title("Forest Plot — Cox Proportional Hazards Model", fontsize=13, fontweight="bold", color="#1F4E78", pad=15)
+
+    ax.text(-0.03, n + 0.5, "Covariate", transform=ax.get_yaxis_transform(), ha="right", va="center", fontsize=11, fontweight="bold", color="#555555")
+    ax.text(1.03, n + 0.5, "aHR [95% CI]", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=11, fontweight="bold", color="#555555")
+    ax.text(1.55, n + 0.5, "p-value", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=11, fontweight="bold", color="#555555")
+
+    plt.savefig(str(output_path), bbox_inches="tight")
+    plt.close(fig)
+    return output_path

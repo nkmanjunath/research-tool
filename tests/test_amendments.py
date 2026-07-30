@@ -199,6 +199,46 @@ def test_lock_plan_still_refuses_after_unmask():
         lock_plan(STUDY_ID, plan)
 
 
+# ── Test: Amendment preserves cox_ph_models ──────────────────────────────
+
+def test_amendment_preserves_cox_ph_models():
+    """lock_amendment() must carry forward cox_ph_models from the prior plan version."""
+    from core.planning.study_plan import CoxPHModel
+
+    _set_state(1)  # locked/masked
+    cox_model = CoxPHModel(
+        model_name="pfs_model",
+        survival_time_col="pfs_days",
+        event_col="pfs_event",
+        primary_treatment_col="treatment_arm",
+        covariate_cols=["age"],
+        rationale="Test model",
+    )
+    plan = StudyPlan(
+        study_id=STUDY_ID,
+        study_type="cohort",
+        primary_comparison="PFS by arm",
+        planned_tests=[{"variable_name": "response", "test_name": "chi_square"}],
+        cox_ph_models=[cox_model],
+    )
+    lock_plan(STUDY_ID, plan)  # v1
+
+    # Amend: add a new test
+    lock_amendment(
+        STUDY_ID,
+        amendment_reason="Added t-test",
+        planned_tests=[{"variable_name": "response", "test_name": "t_test"}],
+    )
+
+    # Load v2 and verify cox_ph_models survived
+    v2 = load_plan(STUDY_ID, version=2)
+    assert len(v2.cox_ph_models) == 1, \
+        f"Expected 1 cox_ph_model in v2, got {len(v2.cox_ph_models)}"
+    assert v2.cox_ph_models[0].model_name == "pfs_model"
+    assert v2.cox_ph_models[0].event_col == "pfs_event"
+    assert v2.cox_ph_models[0].covariate_cols == ["age"]
+
+
 def test_analyze_dedup_no_rerun():
     """Analyze must skip tests that already have a completed result."""
     _lock_v1()

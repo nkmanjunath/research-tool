@@ -238,6 +238,30 @@ def test_table1_multiindex_columns_flattened(monkeypatch):
     assert "Overall" in draft
 
 
+def test_table1_hierarchical_markdown_formatting(monkeypatch):
+    """Categorical variables in Table 1 should render bold parent header and indented child rows."""
+    _setup_study()
+    lock_plan(STUDY_ID, StudyPlan(study_id=STUDY_ID, study_type="cohort", primary_comparison="test"))
+
+    idx = pd.MultiIndex.from_tuples([
+        ("high_risk_fish, n (%)", "no"),
+        ("high_risk_fish, n (%)", "yes"),
+    ])
+    cols = ["Missing", "Overall", "A", "B"]
+    fake_tbl = pd.DataFrame(
+        [["0", "12 (57.1)", "6 (60.0)", "6 (54.5)"],
+         ["0", "9 (42.9)", "4 (40.0)", "5 (45.5)"]],
+        index=idx, columns=cols,
+    )
+
+    monkeypatch.setattr("core.stats.descriptive.generate_table1", lambda study_id, groupby=None: fake_tbl)
+
+    draft = generate_draft(STUDY_ID)
+    assert "**high_risk_fish, n (%)**" in draft
+    assert "&nbsp;&nbsp;no" in draft
+    assert "&nbsp;&nbsp;yes" in draft
+
+
 # ── Fix 2: Abstract hydration ─────────────────────────────────────────────
 
 def test_abstract_hydrated_with_analysis_results():

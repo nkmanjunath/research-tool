@@ -78,6 +78,11 @@ def generate_table1(
     cat_vars = [c for c in cat_vars if c in df.columns]
     cont_vars = [c for c in cont_vars if c in df.columns]
 
+    # Exclude stratification/grouping variable from row list (CONSORT / Table 1 standard)
+    if groupby:
+        cat_vars = [c for c in cat_vars if c != groupby]
+        cont_vars = [c for c in cont_vars if c != groupby]
+
     if not cat_vars and not cont_vars:
         return pd.DataFrame()
 

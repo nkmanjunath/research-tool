@@ -62,13 +62,22 @@ def _apply_zebra(ws, start_row: int, end_row: int, max_col: int):
 
 
 def _autofit_columns(ws, min_width: int = 10, max_width: int = 55):
-    """Auto-fit column widths."""
-    for col_cells in ws.columns:
-        col_letter = get_column_letter(col_cells[0].column)
+    """Auto-fit column widths — only for columns that have data."""
+    # Find the max column with actual data
+    max_col = 0
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.value is not None and cell.column > max_col:
+                max_col = cell.column
+    if max_col == 0:
+        return
+    for col_idx in range(1, max_col + 1):
+        col_letter = get_column_letter(col_idx)
         lengths = []
-        for cell in col_cells:
-            if cell.value is not None:
-                lengths.append(len(str(cell.value)))
+        for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                if cell.value is not None:
+                    lengths.append(len(str(cell.value)))
         if lengths:
             best = min(max(max(lengths) + 2, min_width), max_width)
             ws.column_dimensions[col_letter].width = best
@@ -260,8 +269,8 @@ def _build_tab1_summary(ws, study_id, study, plan_data, analyses, strobe_satisfi
         from core.reporting.plots import generate_km_plot
         km_result = next(
             (a for a in analyses
-             if a["test_name"] == "kaplan_meier_logrank"
-             and json.loads(a["status_json"] or "{}").get("status") == "completed"),
+             if a["test_name"] in ("kaplan_meier_logrank", "kaplan_meier")
+             and json.loads(a["status_json"] or "{}").get("status") in ("completed", "assumption_violation")),
             None,
         )
         if km_result:
@@ -271,11 +280,44 @@ def _build_tab1_summary(ws, study_id, study, plan_data, analyses, strobe_satisfi
             if temp_files is not None:
                 temp_files.append(tmp_png)
             img = XlImage(str(tmp_png))
-            img.width, img.height = 600, 380
+            # Preserve aspect ratio: scale to fit 600px width
+            from PIL import Image as PILImage
+            with PILImage.open(str(tmp_png)) as pil_img:
+                orig_w, orig_h = pil_img.size
+            target_w = 600
+            img.width = target_w
+            img.height = int(orig_h * target_w / orig_w)
             ws.add_image(img, f"A{r}")
-            r += 25
-    except Exception:
-        pass
+            r += 26
+    except Exception as e:
+        import sys
+        print(f"WARNING: KM image embedding failed: {e}", file=sys.stderr)
+
+    # Embed Forest plot as PNG
+    try:
+        from core.reporting.forest_plot import generate_forest_plot_png
+        cox_result = next(
+            (a for a in analyses
+             if a["test_name"] in ("cox_ph_model", "cox_proportional_hazards")
+             and json.loads(a["status_json"] or "{}").get("status") in ("completed", "assumption_violation")),
+            None,
+        )
+        if cox_result:
+            tmp_forest_png = Path(tempfile.mkstemp(suffix=".png")[1])
+            generate_forest_plot_png(study_id, output_path=tmp_forest_png)
+            if temp_files is not None:
+                temp_files.append(tmp_forest_png)
+            img_f = XlImage(str(tmp_forest_png))
+            with PILImage.open(str(tmp_forest_png)) as pil_img:
+                orig_w, orig_h = pil_img.size
+            target_w = 600
+            img_f.width = target_w
+            img_f.height = int(orig_h * target_w / orig_w)
+            ws.add_image(img_f, f"A{r}")
+            r += 26
+    except Exception as e:
+        import sys
+        print(f"WARNING: Forest plot image embedding failed: {e}", file=sys.stderr)
 
 
 # ── Tab 2: Table 1 — Baseline Characteristics ───────────────────────────
@@ -291,6 +333,7 @@ VALUE_MAPPINGS = {
 def _build_tab2_table1(wb, study_id):
     ws = wb.create_sheet(title="Table 1 - Baseline")
     ws.sheet_properties.tabColor = "1F4E78"
+    ws.sheet_view.showGridLines = False
 
     from core.stats.descriptive import generate_table1
     from core.database import get_connection
@@ -410,10 +453,41 @@ def _build_tab3_analyses(wb, study_id, analyses):
     var_map = {}
     if plan_data:
         primary_comparison = plan_data.get("primary_comparison", "")
+        # Build variable ID → column_name lookup
+        conn_tmp = get_connection(study_id)
+        var_id_to_name = {}
+        for row in conn_tmp.execute(
+            "SELECT id, column_name FROM variables WHERE study_id=?", (study_id,)
+        ).fetchall():
+            var_id_to_name[str(row["id"])] = row["column_name"]
+        conn_tmp.close()
+
         for t in plan_data.get("planned_tests", []):
-            var_map[t.get("test_name", "")] = t.get("variable_name", "")
+            vn = t.get("variable_name", "")
+            # Resolve variable ID to column name if needed
+            if vn in var_id_to_name:
+                vn = var_id_to_name[vn]
+            var_map[t.get("test_name", "")] = vn
         for t in plan_data.get("post_hoc_tests", []):
-            var_map[t.get("test_name", "")] = t.get("variable_name", "")
+            vn = t.get("variable_name", "")
+            if vn in var_id_to_name:
+                vn = var_id_to_name[vn]
+            var_map[t.get("test_name", "")] = vn
+        for m in plan_data.get("cox_ph_models", []):
+            st = m.get("survival_time_col", "")
+            if str(st) in var_id_to_name:
+                st = var_id_to_name[str(st)]
+            if st:
+                var_map["cox_ph_model"] = st
+                var_map["cox_proportional_hazards"] = st
+        if "cox_ph_model" not in var_map:
+            outcomes = plan_data.get("primary_outcome_variable_ids", [])
+            if outcomes:
+                o0 = outcomes[0]
+                if str(o0) in var_id_to_name:
+                    o0 = var_id_to_name[str(o0)]
+                var_map["cox_ph_model"] = o0
+                var_map["cox_proportional_hazards"] = o0
 
     # Pre-fetch covariate results
     conn = get_connection(study_id)
@@ -468,8 +542,14 @@ def _build_tab3_analyses(wb, study_id, analyses):
         if variable and variable != "pfs_days" and variable != "os_days":
             v_clean = _format_label(variable)
             comparison = f"{v_clean} by Treatment Arm"
-        ci_lower_str = f"{a['ci_lower']:.4f}" if a["ci_lower"] is not None else "N/A"
-        ci_upper_str = f"{a['ci_upper']:.4f}" if a["ci_upper"] is not None else "N/A"
+        # For cox_ph_model, CI applies to individual covariates, not the
+        # overall omnibus model (which uses LR test). Show "N/A" for main row.
+        if test_name == "cox_ph_model":
+            ci_lower_str = "N/A"
+            ci_upper_str = "N/A"
+        else:
+            ci_lower_str = f"{a['ci_lower']:.4f}" if a["ci_lower"] is not None else "N/A"
+            ci_upper_str = f"{a['ci_upper']:.4f}" if a["ci_upper"] is not None else "N/A"
         lr_p_str = ""
         c_index_str = ""
         try:
@@ -503,20 +583,25 @@ def _build_tab3_analyses(wb, study_id, analyses):
             ws.cell(row=r, column=ci).border = THIN_BORDER
         r += 1
 
-        # Per-covariate sub-rows for Cox PH
+        # Per-covariate sub-rows for Cox PH — aligned to parent columns:
+        # Col 2: Covariate (label), Col 6: HR (under Statistic),
+        # Col 7: P-Value, Col 9: CI Lower, Col 10: CI Upper
         cov_rows = covariate_map.get(a["id"], [])
         if cov_rows:
-            cov_headers = ["", "Covariate", "HR", "CI Lower", "CI Upper", "P-Value"]
             cov_start = r
-            for ci, h in enumerate(cov_headers, 1):
-                ws.cell(row=r, column=ci, value=h).font = Font(name="Calibri", italic=True, size=10, color="555555")
+            cov_font = Font(name="Calibri", italic=True, size=10, color="555555")
+            ws.cell(row=r, column=4, value="Covariate").font = cov_font
+            ws.cell(row=r, column=6, value="HR").font = cov_font
+            ws.cell(row=r, column=7, value="P-Value").font = cov_font
+            ws.cell(row=r, column=9, value="CI Lower").font = cov_font
+            ws.cell(row=r, column=10, value="CI Upper").font = cov_font
             r += 1
             for cr in cov_rows:
-                ws.cell(row=r, column=2, value=cr["covariate"]).font = BODY_FONT
-                ws.cell(row=r, column=3, value=f"{cr['hr']:.4f}" if cr.get("hr") is not None else "").font = BODY_FONT
-                ws.cell(row=r, column=4, value=f"{cr['ci_lower']:.4f}" if cr.get("ci_lower") is not None else "").font = BODY_FONT
-                ws.cell(row=r, column=5, value=f"{cr['ci_upper']:.4f}" if cr.get("ci_upper") is not None else "").font = BODY_FONT
-                ws.cell(row=r, column=6, value=f"{cr['wald_p']:.4f}" if cr.get("wald_p") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=4, value=cr["covariate"]).font = BODY_FONT
+                ws.cell(row=r, column=6, value=f"{cr['hr']:.4f}" if cr.get("hr") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=7, value=f"{cr['wald_p']:.4f}" if cr.get("wald_p") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=9, value=f"{cr['ci_lower']:.4f}" if cr.get("ci_lower") is not None else "").font = BODY_FONT
+                ws.cell(row=r, column=10, value=f"{cr['ci_upper']:.4f}" if cr.get("ci_upper") is not None else "").font = BODY_FONT
                 r += 1
 
     _apply_zebra(ws, 2, r - 1, len(headers))
@@ -566,14 +651,25 @@ def _build_tab4_audit(wb, study_id, plan_data):
     results_json = _canonical_json(results)
     results_hash = _sha256(results_json)
 
-    COMPOSITE_SEP = "||"
-    composite_hash = _sha256(COMPOSITE_SEP.join([raw_data_hash, locked_plan_hash, results_hash]))
+    # Check if bundle exists and read composite hash from manifest
+    composite_hash_str = "Run 'bundle' command to generate"
+    bundle_path = DATA_ROOT / study_id / f"{study_id}_bundle.tar.gz"
+    if bundle_path.exists():
+        try:
+            import tarfile
+            with tarfile.open(bundle_path, "r:gz") as tf:
+                manifest_file = tf.extractfile("manifest.json")
+                if manifest_file:
+                    manifest = json.loads(manifest_file.read().decode("utf-8"))
+                    composite_hash_str = manifest.get("composite_hash", composite_hash_str)
+        except Exception:
+            pass
 
     rows = [
         ("Study Plan (locked)", locked_plan_hash),
         ("Raw Data (ingested)", raw_data_hash),
         ("Analysis Results", results_hash),
-        ("Composite Bundle Hash", composite_hash),
+        ("Composite Bundle Hash", composite_hash_str),
     ]
 
     for ri, (label, hash_val) in enumerate(rows):

@@ -719,6 +719,13 @@ def cmd_analyze(args: argparse.Namespace) -> None:
     force = getattr(args, "force", False)
     rerun = getattr(args, "rerun", False)
 
+    # Build variable ID → column_name lookup for resolving --test var_id specs
+    var_id_to_name = {}
+    for row in conn.execute(
+        "SELECT id, column_name FROM variables WHERE study_id=?", (args.study_id,)
+    ).fetchall():
+        var_id_to_name[str(row["id"])] = row["column_name"]
+
     # Build combined test list: planned tests (pre-registered) + post-hoc tests (exploratory)
     # The --post-hoc flag on analyze is legacy; analyze now runs both lists automatically.
     test_runs: list[tuple[list[dict], int, str]] = []  # (tests, is_pre_registered, label)
@@ -738,6 +745,11 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             test_rationale = t.get("rationale", "")
             if not test_name or not var_name:
                 continue
+
+            # Resolve variable ID to column name if needed
+            # (e.g., --test "8:kaplan_meier_logrank:..." stores "8", not "pfs_days")
+            if var_name in var_id_to_name:
+                var_name = var_id_to_name[var_name]
 
             # Dedup: skip if completed result already exists for this exact test
             if not rerun:
@@ -831,9 +843,25 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                 prefix = var_name.replace("_days", "").replace("_months", "").replace("_time", "")
                 kwargs["time_col"] = var_name
                 kwargs["event_col"] = f"{prefix}_event"
-            result = run_test(test_name, df, **kwargs)
-            result["status"] = "completed"
-            result["reason"] = None
+            try:
+                result = run_test(test_name, df, **kwargs)
+            except Exception as e:
+                # Catch per-test failures, record error, continue batch
+                result = {
+                    "test_name": test_name,
+                    "statistic": None,
+                    "p_value": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "params": {},
+                    "effect_size": None,
+                    "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
+                }
+                result["status"] = "error"
+                result["reason"] = str(e)
+            else:
+                result["status"] = "completed"
+                result["reason"] = None
             result["rationale"] = t.get("rationale", "")
             result["variable_name"] = var_name
             result["is_pre_registered"] = is_pre_registered
@@ -917,19 +945,34 @@ def cmd_analyze(args: argparse.Namespace) -> None:
             interaction_terms = _model_field(model, "interaction_terms", [])
 
             # Run the multivariable Cox PH model
-            result = run_test(
-                "cox_ph_model",
-                df,
-                outcome_col=survival_time_col,
-                group_col=primary_treatment_col,
-                time_col=survival_time_col,
-                event_col=event_col,
-                covariates=covariate_cols,
-                var_types=var_types,
-                interaction_terms=interaction_terms,
-            )
-            result["status"] = "completed"
-            result["reason"] = None
+            try:
+                result = run_test(
+                    "cox_ph_model",
+                    df,
+                    outcome_col=survival_time_col,
+                    group_col=primary_treatment_col,
+                    time_col=survival_time_col,
+                    event_col=event_col,
+                    covariates=covariate_cols,
+                    var_types=var_types,
+                    interaction_terms=interaction_terms,
+                )
+            except Exception as e:
+                result = {
+                    "test_name": "cox_ph_model",
+                    "statistic": None,
+                    "p_value": None,
+                    "ci_lower": None,
+                    "ci_upper": None,
+                    "params": {},
+                    "effect_size": None,
+                    "sample_counts": {"n_total": len(df), "n_analyzed": 0, "n_excluded": len(df)},
+                }
+                result["status"] = "error"
+                result["reason"] = str(e)
+            else:
+                result["status"] = "completed"
+                result["reason"] = None
             result["rationale"] = model_rationale
             result["variable_name"] = model_name
             result["test_name"] = "cox_ph_model"
@@ -1539,6 +1582,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run post-hoc/exploratory tests instead of pre-registered tests")
     sp.add_argument("--rerun", action="store_true",
                     help="Force recomputation even if a completed result already exists")
+    sp.add_argument("--adjust-p", action="store_true",
+                    help="Apply multiple-testing correction across tests (default: False for unadjusted/adjusted sensitivity views of the same endpoint)")
     sp.set_defaults(func=cmd_analyze)
 
     # strobe-check
@@ -1614,6 +1659,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("plot-forest",
                         help="Render forest plot for Cox PH results")
     sp.add_argument("study_id")
+    sp.add_argument("extra_args", nargs="*", help=argparse.SUPPRESS)
     sp.add_argument("--svg", dest="output", type=str, default=None,
                     help="Output SVG path (default: data/studies/<id>/forest_plot.svg)")
     sp.add_argument("--ascii", action="store_true",
@@ -1624,6 +1670,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("flowchart",
                         help="Render CONSORT/STROBE patient flow diagram")
     sp.add_argument("study_id")
+    sp.add_argument("extra_args", nargs="*", help=argparse.SUPPRESS)
     sp.add_argument("--svg", dest="output", type=str, default=None,
                     help="Output SVG path (default: data/studies/<id>/flowchart.svg)")
     sp.add_argument("--ascii", action="store_true",

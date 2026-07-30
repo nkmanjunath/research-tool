@@ -24,17 +24,28 @@ tableone.
 ## Usage
 
 ```bash
-research-tool new-study "Myeloma EMD Study"
-research-tool ingest study_1 data.csv
-research-tool classify-variables study_1
-research-tool explore-baseline study_1
-research-tool table1 study_1
-research-tool plan study_1
-research-tool lock study_1
-research-tool unmask study_1
-research-tool analyze study_1
-research-tool strobe-check study_1
-research-tool draft study_1
+STUDY=$(research-tool new-study "Myeloma EMD Study")
+research-tool ingest $STUDY data.csv
+research-tool classify-variables $STUDY
+
+# Look up outcome variable IDs (assigned per-study at ingest time)
+research-tool list-variables $STUDY
+
+# Use the IDs from list-variables for outcome columns (e.g. pfs_days=8, pfs_event=9)
+research-tool plan $STUDY \
+  --comparison "PFS by treatment arm" \
+  --outcome-var-ids "8,9" \
+  --cox-ph-models "pfs_model:pfs_days:pfs_event:treatment_arm:age,iss_stage:Adjusted PFS model"
+research-tool lock $STUDY
+research-tool unmask $STUDY
+research-tool analyze $STUDY
+research-tool flowchart $STUDY
+research-tool plot-forest $STUDY
+research-tool strobe-check $STUDY
+research-tool draft $STUDY
+research-tool export-excel $STUDY
 ```
+
+> **Note:** Variable IDs are auto-assigned per-study at ingest time and are **not predictable**. Always run `list-variables` after `classify-variables` to get the correct IDs for `--outcome-var-ids`.
 
 See `research-tool --help` for details.

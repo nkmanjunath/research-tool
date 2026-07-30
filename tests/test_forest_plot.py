@@ -111,22 +111,42 @@ class TestCovariateRowProperties:
 
 
 class TestAgainstRealStudy:
-    """Test against a0368cf06b4444ca8a4118704b1edd2f — real data, no hardcoding."""
+    """Test against 4-covariate myeloma cohort study with EPV=2.5."""
+
+    def setup_method(self):
+        self.sid = "test_forest_real_study"
+        covariates = [
+            {"covariate": "treatment_arm", "hr": 1.7029, "ci_lower": 0.2402,
+             "ci_upper": 12.0733, "wald_p": 0.5943, "reference_level": "A", "tested_level": "B"},
+            {"covariate": "age", "hr": 0.9934, "ci_lower": 0.9199,
+             "ci_upper": 1.0727, "wald_p": 0.8656},
+            {"covariate": "high_risk_fish", "hr": 0.3455, "ci_lower": 0.0606,
+             "ci_upper": 1.9711, "wald_p": 0.2316},
+            {"covariate": "prior_lines", "hr": 0.8521, "ci_lower": 0.5412,
+             "ci_upper": 1.3415, "wald_p": 0.4870},
+        ]
+        _make_study(
+            self.sid, covariates, n=21,
+            epv_text="cox_ph_model pfs_model: 10 events across 4 predictor(s) (EPV=2.5). Cox models are unreliable below 10 events per predictor."
+        )
+
+    def teardown_method(self):
+        shutil.rmtree(DATA_ROOT / self.sid, ignore_errors=True)
 
     def test_loads_four_covariates(self):
         """Must load exactly 4 covariates with correct display labels."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
+        data = load_forest_data(self.sid)
         assert len(data.covariates) == 4
         labels = [c.display_label for c in data.covariates]
-        assert any("treatment_arm" in l for l in labels)
-        assert any("age" in l for l in labels)
-        assert any("high_risk_fish" in l for l in labels)
-        assert any("prior_lines" in l for l in labels)
+        assert any("Treatment Group" in l for l in labels)
+        assert any("Age, years" in l for l in labels)
+        assert any("High-Risk Cytogenetics" in l for l in labels)
+        assert any("Prior Lines of Therapy" in l for l in labels)
 
     def test_values_match_db(self):
         """HR/CI/p values must match DB exactly — pull and compare."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
-        conn = get_connection("a0368cf06b4444ca8a4118704b1edd2f")
+        data = load_forest_data(self.sid)
+        conn = get_connection(self.sid)
         rows = conn.execute(
             "SELECT covariate, hr, ci_lower, ci_upper, wald_p, reference_level, tested_level "
             "FROM analysis_covariate_results "
@@ -136,7 +156,7 @@ class TestAgainstRealStudy:
             "    FROM analysis_results WHERE study_id=? AND test_name='cox_ph_model' "
             "    AND superseded_previous_result_id IS NOT NULL) "
             "  ORDER BY id DESC LIMIT 1)",
-            ("a0368cf06b4444ca8a4118704b1edd2f",) * 2,
+            (self.sid,) * 2,
         ).fetchall()
         conn.close()
         db_map = {r["covariate"]: r for r in rows}
@@ -150,21 +170,21 @@ class TestAgainstRealStudy:
             assert c.tested_level == db["tested_level"]
 
     def test_epv_caveat_present(self):
-        """Study a0368cf has EPV=2.5 — report must carry the caveat."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
+        """Study has EPV=2.5 — report must carry the caveat."""
+        data = load_forest_data(self.sid)
         assert data.epv_warning is True
         assert data.epv is not None
         assert data.epv < 10
 
     def test_all_cis_cross_one(self):
         """All 4 covariates in this study have CI crossing 1."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
+        data = load_forest_data(self.sid)
         for c in data.covariates:
             assert c.ci_crosses_one, f"{c.covariate} CI does not cross 1"
 
     def test_svg_renders_with_epv_caveat(self):
         """SVG output must contain the EPV caveat text."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
+        data = load_forest_data(self.sid)
         out = "/tmp/test_forest_real.svg"
         render_svg(data, out)
         svg = Path(out).read_text()
@@ -175,7 +195,7 @@ class TestAgainstRealStudy:
 
     def test_ascii_renders_with_epv_caveat(self):
         """ASCII output must contain the EPV caveat text."""
-        data = load_forest_data("a0368cf06b4444ca8a4118704b1edd2f")
+        data = load_forest_data(self.sid)
         text = render_ascii(data)
         assert "EPV=2.5" in text
         assert "Caution" in text

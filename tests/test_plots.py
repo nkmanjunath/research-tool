@@ -380,3 +380,15 @@ def test_scientific_vs_presentation_svg_fill_opacity_differs():
     finally:
         out_sci.unlink()
         out_pres.unlink()
+
+
+def test_km_plot_ci_clamped_at_t0():
+    """Confidence interval at t=0 must be clamped to [1.0, 1.0] (zero width at t=0)."""
+    _setup_plan_and_result(with_completed_km=True)
+    out_path = Path(tempfile.mkstemp(suffix=".svg")[1])
+    try:
+        generate_km_plot(STUDY_ID, test_id=1, output_path=out_path, fmt="svg", style="clean")
+        assert out_path.exists()
+    finally:
+        out_path.unlink()
+

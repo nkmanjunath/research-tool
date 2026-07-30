@@ -484,3 +484,157 @@ Captured from full-repo audit on 2026-07-28. HIGH/CRITICAL items already fixed i
 **Files:** `core/planning/lock.py` (line 117), `core/masking/gate.py` (line 83)
 **Issue:** lock.py delegates to gate.py. This is an intentional wrapper, not a true duplicate.
 **Status:** No action needed.
+
+---
+
+## 12. Robustness Audit (BATCH-FAILURE severity — fixed)
+
+Captured from manual full-pipeline run on 2026-07-29. Two bugs in `cmd_analyze` that caused silent batch abortion.
+
+### B1: Variable ID not resolved to column name
+**File:** `core/cli/main.py`, `cmd_analyze` (lines 749-752)
+**Issue:** `--test "8:kaplan_meier_logrank:..."` stores "8" as `variable_name`. Event-col derivation expects column name "pfs_days" → produces "8_event" → ValueError → abort.
+**Root cause:** `cmd_plan` stores first token of `--test` spec as `variable_name` without resolving ID to column name.
+**Fix:** In `cmd_analyze`, build `var_id_to_name` lookup from variables table, resolve before event-col derivation.
+
+### B2: One test failure aborts entire batch
+**File:** `core/cli/main.py`, `cmd_analyze` (lines 846-873)
+**Issue:** No try/except around `run_test()`. Any exception (e.g., ValueError from B1) crashes entire analysis, preventing Cox PH and other independent tests from running.
+**Root cause:** Missing error isolation per test.
+**Fix:** Wrap each test execution in try/except, record error result, continue batch. Same for Cox PH models.
+
+---
+
+## 13. Visualization & Export Audit (E2E severity — fixed)
+
+Captured from manual full-pipeline run on synthetic_21_v2.csv (N=21) on 2026-07-29. Five bugs in plotting and Excel export.
+
+### B3: KM risk-table axis drift
+**File:** `core/reporting/plots.py`, `generate_km_plot` (lines 397-563)
+**Issue:** Risk-table columns drift left relative to x-axis ticks. Root cause: `tight_layout()` + `bbox_inches="tight"` shifts axes AFTER text annotations are placed in data coordinates.
+**Fix:** Use `constrained_layout=True` in `plt.subplots()` instead of post-hoc `tight_layout()`. Remove manual position sync.
+
+### B4: KM curve/canvas right-margin padding
+**File:** `core/reporting/plots.py`, line 528
+**Issue:** Group B curve truncates at canvas edge with only 5% padding — visually cramped on small N datasets.
+**Fix:** Increase right padding from 5% to 10% of max observed time.
+
+### B5: Excel embedded KM aspect-ratio distortion
+**File:** `core/reporting/excel_export.py`, line 274
+**Issue:** `img.width, img.height = 600, 380` — hardcoded dimensions don't preserve source image aspect ratio. KM plot appears squished in Excel.
+**Fix:** Read actual PNG dimensions with PIL, scale proportionally to fit 600px width.
+
+### B6: Excel cox_ph_model CI wrong
+**File:** `core/reporting/excel_export.py`, lines 477-484
+**Issue:** Overall model summary row populates 95% CI (Lower/Upper) from first covariate (treatment_arm). Omnibus LR test has no single CI — it's a chi-square test.
+**Fix:** For `cox_ph_model`, show "N/A" in CI columns for main row. CI appears only in per-covariate sub-rows.
+
+### B7: Audit hash mismatch (Excel vs bundle)
+**File:** `core/reporting/excel_export.py`, lines 581-588 vs `core/reporting/bundle.py`, lines 90-95
+**Issue:** Bundle includes `covariate_results` in results hash; Excel export doesn't. Different data = different composite hash. Excel displayed a "Composite Bundle Hash" that would never match the actual bundle.
+**Root cause:** Excel tried to predict a composite hash before bundle existed, using different serialization.
+**Fix:** Excel shows "Run 'bundle' command to generate" if bundle doesn't exist, or reads actual hash from bundle's manifest.json if it does. Component hashes (raw_data, plan, results) still displayed.
+
+### B8: Excel "Comparison" column shows raw variable ID
+**File:** `core/reporting/excel_export.py`, lines 417-439
+**Issue:** `var_map` built from locked plan stores raw `variable_name` (e.g., "8") instead of column name ("pfs_days"). Row shows "8 by Treatment Arm" instead of "Pfs Days by Treatment Arm".
+**Fix:** Resolve variable ID to column name via variables table lookup when building `var_map`.
+
+### B9: Table 1 orphan border column E
+**File:** `core/reporting/excel_export.py`, `_autofit_columns` (lines 64-83)
+**Issue:** `_autofit_columns` iterated `ws.columns` (ALL columns including empty), creating default `Border()` objects on cells beyond the data range. Column E+ appeared with borders but no data.
+**Fix:** Find max column with actual data first, only iterate up to that column.
+
+### B10: Flowchart mislabeled "CONSORT" for cohort study
+**File:** `core/reporting/flowchart/flowchart.py`, line 342
+**Issue:** Title hardcoded as "CONSORT Participant Flow Diagram". CONSORT is RCT-specific; STROBE governs observational/cohort designs.
+**Fix:** Added `study_type` to `FlowchartData`. Title now uses "STROBE Participant Flow Diagram" for non-RCT studies, "CONSORT" only when `study_type == "rct"`.
+
+### Investigation: KM x-axis unit (days vs months)
+**File:** `core/reporting/plots.py`, lines 381-382, 418
+**Finding:** Conversion IS correct. `DAYS_PER_MONTH = 30.44`. Raw `pfs_days` values divided by 30.44 before plotting. Label "Time (months)" correctly reflects the plotted unit. No fix needed.
+
+---
+
+## 14. Third-Pass Audit (E2E severity — fixed)
+
+Captured from manual full-pipeline run on 2026-07-29.
+
+### B9 (3rd attempt): Table 1 orphan border column E
+**File:** `core/reporting/excel_export.py`, `_build_tab2_table1` (line 310)
+**Root cause:** Prior fixes touched `_autofit_columns` (irrelevant) and border loop (correct). The ACTUAL visible artifact was Excel gridlines, not cell borders. Column E had `Border()` with `style=None` (no border), but worksheet gridlines extended across all columns.
+**Fix:** `ws.sheet_view.showGridLines = False` on Table 1 sheet. Only actual cell borders are now visible.
+
+### B11: Flowchart phase labels use RCT terminology for non-RCT
+**File:** `core/reporting/flowchart/flowchart.py`, lines 357-365
+**Issue:** Phase pills hardcoded as ENROLLMENT/ALLOCATION/ANALYSIS. "ALLOCATION" implies randomized allocation, inappropriate for cohort/case-control studies.
+**Fix:** Use STROBE-appropriate labels for non-RCT: STUDY POPULATION / FOLLOW-UP / ANALYSIS. CONSORT labels only when `study_type == "rct"`.
+
+### B12: EPV warning vague in manuscript Limitations
+**File:** `core/reporting/manuscript_draft.py`, lines 58-267
+**Issue:** Existing EPV check said "may be inadequate for reliable inference" — vague, doesn't mention overfitting or unstable estimates.
+**Fix:** Now explicitly states "severe overfitting produces unstable coefficient estimates and unreliable confidence intervals" with the EPV value and recommended threshold.
+
+### B5 re-verification: KM image bottom padding
+**Finding:** Fresh render confirms risk-table row B fully visible with margin below. No truncation. Prior session's XML analysis was correct — image displays at 600x450 (4:3 aspect ratio preserved).
+
+---
+
+## 15. Fourth-Pass Audit & Refinements (B13 & B14)
+
+Captured from verification pass and task prompt on 2026-07-29.
+
+### B13: Excel nested Cox PH covariate rows misaligned
+**File:** `core/reporting/excel_export.py`, lines 552 & 559
+**Issue:** Covariate header ("Covariate") and covariate names were written to Column 2 (Test Name), causing sub-table headers and values to be shifted left relative to parent table columns (HR under Comparison, etc.).
+**Fix:** Changed `column=2` to `column=4` (Variable). Nested sub-rows now align under:
+  - Cell D (Col 4): Variable / Covariate name (`treatment_arm`, `age`, `iss_stage`, `high_risk_fish`)
+  - Cell F (Col 6): Statistic / HR
+  - Cell G (Col 7): P-Value / Wald P-Value
+  - Cell I (Col 9): 95% CI (Lower) / CI Lower
+  - Cell J (Col 10): 95% CI (Upper) / CI Upper
+**Verification:** Added regression test `test_excel_cox_ph_covariate_alignment` in `tests/test_excel_export.py`. Visually inspected output `study_report.xlsx` sheet `Statistical Analyses` coordinates D5:J9.
+
+### B14: Flowchart stage labels for cohort studies
+**File:** `core/reporting/flowchart/flowchart.py`, lines 282 & 363
+**Issue:** For non-RCT/cohort studies, the middle stage label pill at row y3 (group/treatment arm split) was labeled "FOLLOW-UP", which misidentified exposure/cohort categorization as follow-up.
+**Decision & Wording:** Refined middle pill label to `COHORT ASSIGNMENT` (and increased `pill_w` from 95 to 125 to fit cleanly). Flowchart pills for cohort studies are now `ELIGIBILITY / COHORT ASSIGNMENT / ANALYSIS`.
+**Source Verification Status:** Judgement-based refinement. A web search of STROBE guidelines (PLoS Med 2007; BMJ 2007; Equator Network) confirmed STROBE Item 13 requires reporting numbers at each stage (potentially eligible, examined, included, completing follow-up, analyzed), but STROBE explicitly does *not* mandate a single rigid visual box/pill labeling template (unlike CONSORT 2010 for RCTs). "COHORT ASSIGNMENT" reflects best clinical judgement for the group-split row in observational studies.
+
+### TestAgainstRealStudy Orphaned Study ID Fix
+**File:** `tests/test_forest_plot.py`, lines 113-178
+**Root Cause:** `TestAgainstRealStudy` hardcoded a loose study UUID (`a0368cf06b4444ca8a4118704b1edd2f`) generated during initial local development. Because `data/` is gitignored, the local directory was never committed, making the test suite depend on uncommitted local disk state. Git log confirmed the ID was never in git history. The test expected a 4-covariate study matching the synthetic myeloma cohort (21 patients, EPV=2.5, all 4 CIs crossing 1).
+**Fix:** Added `setup_method` and `teardown_method` to `TestAgainstRealStudy` that constructs a clean isolated test study via `_make_study` containing the exact 4-covariate myeloma cohort profile (`treatment_arm`, `age`, `high_risk_fish`, `prior_lines`, EPV=2.5 warning) and tears it down after tests run. All 6 tests now pass cleanly in any clean environment.
+
+### Forest Plot SVG Header & Layout Geometry Refinement
+**File:** `core/reporting/forest_plot.py`, lines 227-348
+**Issue 1 (Header Alignment):** `"aHR [95% CI]"` and `"p-value"` headers were both positioned at `x = plot_l + plot_w + 10` with `y = header_y` and `y = header_y + 14`, stacking them vertically on top of each other instead of side-by-side.
+**Issue 2 (Text Collision):** `margin_l` was 180 and `plot_l` was `margin_l + 20` (200), leaving only 20px of label allocation before the plot canvas. Long covariate labels like `high_risk_fish (per 1-unit increase)` (~250px wide) extended into `x = 180..430`, striking through the plot graphics (`x = 225..440`).
+**Fix:**
+  - **Header & Column Alignment**: Positioned `"aHR [95% CI]"` at `x = txt_x` (740) and `"p-value"` at `x = txt_x + p_col_offset` (885) on the same line (`y = header_y`), matching the exact column X coordinates of data rows.
+  - **Layout Geometry & Width Expansion**: Adjusted `margin_l = 20`, allocated `label_w = 230` (`plot_l = 270`), expanded plot width `plot_w = 450` (up from 400), placing data labels in `x = 20..250` cleanly separated from plot graphics (`x = 270..720`).
+
+---
+
+## 16. Methodological & Policy Decisions (Flagged for User Decision, Not Implemented)
+
+### P1: Multivariable Cox Model EPV & Covariate Restriction / Penalized Regression
+- **Flagged Issue:** Low EPV ratio (EPV = 2.5) in small cohorts (N=21, 10 events, 4 predictors).
+- **Status:** Flagged for user policy decision — NOT auto-implemented.
+- **Tradeoff:** Restricting multivariable predictor counts or forcing Firth's penalized Cox regression alters statistical methodology and investigator protocol intent. The engine reports transparent EPV warnings in manuscript text, forest plot, and Excel audit logs, preserving investigator intent while flagging statistical caveats.
+
+### P2: Multiple Testing Adjustment Across Unadjusted & Adjusted Models
+- **Flagged Issue:** Bonferroni correction applied across Kaplan-Meier log-rank and multivariable Cox modeling for the primary endpoint.
+- **Status:** Flagged as a methodology decision requiring explicit user sign-off — NOT changed this session.
+- **Candidate future enhancement:** Expose `multiplicity_correction: none | bonferroni | fdr` as a user-configurable plan option rather than a silent default change.
+
+### D1: KM Plot Confidence Interval Baseline at t=0
+- **Finding:** At t=0 (before any events occur), S(0)=1.0 deterministically with zero variance.
+- **Status:** Fixed. Clamped `kmf.confidence_interval_.loc[0.0] = 1.0` so shaded band originates as a single point at (0, 1.0) with zero width, opening up at first event t_1.
+
+### D4: Factor Level Encoding for Categorical Predictors (high_risk_fish)
+- **Finding:** Checked DB `analysis_covariate_results` for `high_risk_fish`: `reference_level='no'`, `tested_level='yes'`, `coef=-0.9691`, `aHR=0.38`, `p=0.27`.
+- **Status:** Verified-no-action. Factor level encoding ('no' as reference, 'yes' as tested) is 100% correct and consistent across the pipeline. Point estimate direction (aHR < 1.0, 95% CI: 0.07-2.14, p=0.27) is small-sample EPV=2.5 noise, not a code defect.
+
+
+

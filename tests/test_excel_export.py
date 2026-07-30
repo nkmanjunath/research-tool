@@ -102,3 +102,63 @@ def test_excel_report_rejects_no_results():
     with pytest.raises(RuntimeError, match="No analysis results"):
         generate_excel_report(STUDY_ID, output_path=out)
     out.unlink()
+
+
+def test_excel_cox_ph_covariate_alignment():
+    """B13 regression: Cox PH covariate rows must align under Col 4 (Variable), Col 6 (HR), Col 7 (P-Value), Col 9/10 (CI)."""
+    plan = StudyPlan(
+        study_id=STUDY_ID,
+        study_type="cohort",
+        primary_comparison="test comparison",
+        planned_tests=[{"variable_name": "age", "test_name": "cox_ph_model"}],
+    )
+    lock_plan(STUDY_ID, plan)
+    conn = get_connection(STUDY_ID)
+    init_db(conn)
+    conn.execute(
+        "INSERT INTO analysis_results (id, study_id, test_name, statistic, p_value, status_json, "
+        "sample_counts_json, is_pre_registered, computed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        (1, STUDY_ID, "cox_ph_model", 3.45, 0.15,
+         json.dumps({"status": "completed"}),
+         json.dumps({"n_total": 2, "n_analyzed": 2, "n_excluded": 0}),
+         "2025-01-01T00:00:00"),
+    )
+    conn.execute(
+        "INSERT INTO analysis_covariate_results (result_id, covariate, hr, ci_lower, ci_upper, wald_p) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (1, "age", 1.05, 0.98, 1.12, 0.1234),
+    )
+    conn.commit()
+    conn.close()
+
+    out = Path(tempfile.mkstemp(suffix=".xlsx")[1])
+    try:
+        generate_excel_report(STUDY_ID, output_path=out)
+        import openpyxl
+        wb = openpyxl.load_workbook(str(out))
+        ws = wb["Statistical Analyses"]
+
+        # Row 1 is parent header
+        assert ws.cell(1, 4).value == "Variable"
+        assert ws.cell(1, 6).value == "Statistic"
+        assert ws.cell(1, 7).value == "P-Value"
+        assert ws.cell(1, 9).value == "95% CI (Lower)"
+        assert ws.cell(1, 10).value == "95% CI (Upper)"
+
+        # Row 3 is sub-header for Cox PH covariates
+        assert ws.cell(3, 4).value == "Covariate"
+        assert ws.cell(3, 6).value == "HR"
+        assert ws.cell(3, 7).value == "P-Value"
+        assert ws.cell(3, 9).value == "CI Lower"
+        assert ws.cell(3, 10).value == "CI Upper"
+
+        # Row 4 is the covariate data row
+        assert ws.cell(4, 4).value == "age"
+        assert ws.cell(4, 6).value == "1.0500"
+        assert ws.cell(4, 7).value == "0.1234"
+        assert ws.cell(4, 9).value == "0.9800"
+        assert ws.cell(4, 10).value == "1.1200"
+    finally:
+        out.unlink()
+

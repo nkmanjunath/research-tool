@@ -474,12 +474,15 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
 
     # --- Overall model statistics ---
     lr_test_p = None
+    lr_stat = None
     try:
         lr_test = cph.log_likelihood_ratio_test()
         lr_test_p = float(lr_test.p_value)
+        lr_stat = float(lr_test.test_statistic)
     except Exception:
         logger.warning("LR test extraction failed", exc_info=True)
         lr_test_p = None
+        lr_stat = None
 
     concordance = float(cph.concordance_index_) if hasattr(cph, "concordance_index_") and cph.concordance_index_ else None
 
@@ -515,7 +518,7 @@ def _cox_ph_model(data: pd.DataFrame, time_col: str, event_col: str,
 
     return _uro(
         test_name="cox_ph_model",
-        statistic=float(hr) if hr is not None else None,
+        statistic=float(lr_stat) if lr_stat is not None else None,
         p_value=float(p) if p is not None else None,
         ci_lower=np.exp(float(ci.iloc[0])) if ci is not None else None,
         ci_upper=np.exp(float(ci.iloc[1])) if ci is not None else None,

@@ -195,7 +195,14 @@ def lock_amendment(
                 f"unmasking. Post-hoc amendments require unmasked data."
             )
         new_planned = list(latest.planned_tests)
-        new_post_hoc = list(latest.post_hoc_tests) + list(post_hoc_tests)
+        new_post_hoc = list(latest.post_hoc_tests)
+        # Dedup: only add tests not already present (by test_name + rationale)
+        existing_keys = {(t.get("test_name"), t.get("rationale", "")) for t in new_post_hoc}
+        for t in post_hoc_tests:
+            key = (t.get("test_name"), t.get("rationale", ""))
+            if key not in existing_keys:
+                new_post_hoc.append(t)
+                existing_keys.add(key)
 
     # ── Build the new plan ────────────────────────────────────────────
     plan = StudyPlan(
@@ -211,6 +218,8 @@ def lock_amendment(
         audit=dict(latest.audit),
         post_hoc_tests=new_post_hoc,
         amendment_reason=amendment_reason,
+        cox_ph_models=list(latest.cox_ph_models),
+        diagnostic_results=list(latest.diagnostic_results),
     )
 
     plan.version = _next_version(study_id)

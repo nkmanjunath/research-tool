@@ -185,6 +185,17 @@ def _resolve_km_vars(study_id: str, test_id: int) -> dict:
 
     var_name = planned_test.get("variable_name", "")
 
+    # Resolve variable ID to column name if needed
+    # (e.g., --test "8:kaplan_meier_logrank:..." stores "8", not "pfs_days")
+    if var_name.isdigit():
+        cur = conn.execute(
+            "SELECT column_name FROM variables WHERE study_id=? AND id=?",
+            (study_id, int(var_name)),
+        )
+        id_row = cur.fetchone()
+        if id_row:
+            var_name = id_row["column_name"]
+
     cur = conn.execute(
         "SELECT column_name, data_type FROM variables WHERE study_id=? AND column_name=?",
         (study_id, var_name),
@@ -383,14 +394,13 @@ def generate_km_plot(
     fitters = []
     max_observed_time = 0.0
 
-    # Two subplots: KM curves on top, risk table below.  Manually sync
-    # x-limits rather than using sharex=True so the tick labels and
-    # "Time (months)" can live on the KM axes (between the two subplots)
-    # while the risk table has only its rows, no redundant tick numbers.
+    # Two subplots: KM curves on top, risk table below.  constrained_layout
+    # handles alignment; manual xlim sync keeps them in register.
     if show_risk_table:
         fig, (ax_km, ax_risk) = plt.subplots(
             2, 1, figsize=(8, 6),
             gridspec_kw={"height_ratios": [4, 1]},
+            constrained_layout=True,
         )
     else:
         fig, ax_km = plt.subplots(figsize=(8, 5))
@@ -412,6 +422,14 @@ def generate_km_plot(
             event_observed=grp_df[event_col],
             label=f"{grp} (n={len(grp_df)})",
         )
+        if 0.0 not in kmf.survival_function_.index or kmf.survival_function_.loc[0.0].isna().any():
+            kmf.survival_function_.loc[0.0] = 1.0
+            kmf.survival_function_.sort_index(inplace=True)
+
+        # Clamp confidence interval at t=0 to [1.0, 1.0] (deterministic S(0)=1.0 before events)
+        kmf.confidence_interval_.loc[0.0] = 1.0
+        kmf.confidence_interval_.sort_index(inplace=True)
+
         kmf.plot_survival_function(
             ax=ax_km,
             color=colors[i],
@@ -513,13 +531,13 @@ def generate_km_plot(
 
     # ── X-axis framing ───────────────────────────────────────────────────
     if max_observed_time > 0:
-        # Add 5% right padding so curves don't collide with right border
-        right_pad = max_observed_time * 0.05
+        # Add 20% right padding so curves don't collide with right border
+        right_pad = max_observed_time * 0.20
         ax_km.set_xlim(0, max_observed_time + right_pad)
     ax_km.set_ylim(0, 1.05)
     ax_km.grid(True, alpha=cfg.grid_alpha)
 
-    # Sync risk table x-axis to match KM axes (no sharex=True anymore)
+    # Sync risk table x-axis to match KM axes
     if ax_risk is not None:
         ax_risk.set_xlim(ax_km.get_xlim())
 
@@ -543,13 +561,8 @@ def generate_km_plot(
             ytick_pad=cfg.risk_ytick_pad,
         )
 
-    plt.tight_layout()
-    # Sync risk table position to match KM axes (§9 fix for alignment drift)
-    if ax_risk is not None:
-        km_pos = ax_km.get_position()
-        risk_pos = ax_risk.get_position()
-        ax_risk.set_position([km_pos.x0, risk_pos.y0, km_pos.width, risk_pos.height])
-    fig.savefig(str(output_path), format=fmt, bbox_inches="tight")
+    # constrained_layout=True handles alignment; just save
+    fig.savefig(str(output_path), format=fmt)
     plt.close(fig)
 
     return output_path
