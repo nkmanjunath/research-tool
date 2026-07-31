@@ -99,19 +99,6 @@ def _get_event_count(study_id: str, event_col: str, conn) -> int:
     return 0
 
 
-def _get_events_from_sample_counts(sc_json: str | None) -> int:
-    if not sc_json:
-        return 0
-    try:
-        sc = json.loads(sc_json)
-    except (json.JSONDecodeError, TypeError):
-        return 0
-    na = sc.get("n_analyzed", 0)
-    # events isn't stored — infer from Cox PH covariate warnings
-    return na
-
-
-
 def load_forest_data(study_id: str) -> ForestPlotData:
     conn = get_connection(study_id)
     init_db(conn)

@@ -14,16 +14,6 @@ def _sanitize_col(name: str) -> str:
     return "".join(c if c.isalnum() or c == "_" else "_" for c in name).strip("_") or "col"
 
 
-def infer_dtype(series: pd.Series) -> str:
-    """Heuristic: int/float → continuous, small cardinality → categorical."""
-    if series.dtype == "object":
-        return "categorical"
-    uniq = series.nunique(dropna=False)
-    if uniq <= 5:
-        return "categorical"
-    return "continuous"
-
-
 def _check_reingest(study_id: str) -> None:
     """Check if study already has ingested data. Raises SystemExit if so."""
     conn = get_connection(study_id)

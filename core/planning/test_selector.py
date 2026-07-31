@@ -371,22 +371,6 @@ class CoxPHAssumptionCheck(AssumptionCheck):
         return []
 
 
-@_register
-class CoxPHModelAssumptionCheck(AssumptionCheck):
-    """Screen multivariable Cox PH model declarations for EPV feasibility.
-
-    This check applies to declared CoxPHModel objects in the study plan.
-    """
-
-    def applies_to(self, test_name: str) -> bool:
-        # This doesn't apply to a test_name directly; it's checked separately
-        return False
-
-    def check(self, study_id: str, test: dict, group_col: str, conn, var_info: dict) -> list[str]:
-        # Not used via the standard check_assumptions dispatcher
-        return []
-
-
 def check_cox_ph_model_assumptions(
     study_id: str,
     models: list,

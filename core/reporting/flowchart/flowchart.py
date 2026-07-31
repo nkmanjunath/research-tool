@@ -35,20 +35,6 @@ class FlowchartData:
     primary_analysis_label: str = ""
 
 
-def _find_duplicate_patient_ids(study_id: str) -> list[tuple[str, int]]:
-    from core.ingestion.csv_loader import find_duplicate_patient_ids
-    return find_duplicate_patient_ids(study_id)
-
-
-
-def _get_plan_event_col(study_id: str) -> str | None:
-    plan = _latest_locked_plan(study_id)
-    cox_models = plan.get("cox_ph_models", [])
-    if cox_models:
-        return cox_models[0].get("event_col")
-    return None
-
-
 def _get_plan_arm_col(study_id: str) -> str | None:
     plan = _latest_locked_plan(study_id)
     cox_models = plan.get("cox_ph_models", [])

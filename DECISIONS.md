@@ -636,5 +636,23 @@ Captured from verification pass and task prompt on 2026-07-29.
 - **Finding:** Checked DB `analysis_covariate_results` for `high_risk_fish`: `reference_level='no'`, `tested_level='yes'`, `coef=-0.9691`, `aHR=0.38`, `p=0.27`.
 - **Status:** Verified-no-action. Factor level encoding ('no' as reference, 'yes' as tested) is 100% correct and consistent across the pipeline. Point estimate direction (aHR < 1.0, 95% CI: 0.07-2.14, p=0.27) is small-sample EPV=2.5 noise, not a code defect.
 
+---
+
+## 17. Dead-Code Audit & Cleanup Pass (2026-07-31)
+
+Audit of full codebase identified 5 dead-code items for removal and 2 items confirmed as load-bearing/reserved logic.
+
+### Removals (5 items — verified 285 tests pass after each deletion)
+1. **`core/reporting/forest_plot.py:102` (`_get_events_from_sample_counts`)**: Unused helper function in forest plot generation.
+2. **`core/reporting/flowchart/flowchart.py:38` (`_find_duplicate_patient_ids`)**: Unused helper function in flowchart module.
+3. **`core/reporting/flowchart/flowchart.py:44` (`_get_plan_event_col`)**: Unused helper function in flowchart module.
+4. **`core/ingestion/csv_loader.py:17` (`infer_dtype`)**: Unused heuristic function; superseded by `core/ingestion/variable_classifier.py`.
+5. **`core/planning/test_selector.py:375` (`CoxPHModelAssumptionCheck`)**: Unused class stub (`applies_to` returned `False`, unreferenced by test runner).
+
+### Confirmed Intentional / Retained (2 items)
+1. **`MaskedDataError` (`core/masking/gate.py:25`)**: Reserved domain exception for outcome data access violations before lock.
+2. **`unmask_study` (`core/planning/lock.py:117`)**: Intentional facade wrapper over `core.masking.gate.unmask_study`.
+
+
 
 
