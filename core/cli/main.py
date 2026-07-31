@@ -510,7 +510,9 @@ def cmd_lock(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # ── Block locking on duplicate patient IDs unless explicitly allowed ──
-    if not getattr(args, "allow_duplicate_ids", False):
+    strict = getattr(args, "strict_ids", False)
+    allow_dupes = getattr(args, "allow_duplicate_ids", False)
+    if strict or not allow_dupes:
         from core.ingestion.csv_loader import find_duplicate_patient_ids
         dupes = find_duplicate_patient_ids(args.study_id)
         if dupes:
@@ -1540,6 +1542,8 @@ def build_parser() -> argparse.ArgumentParser:
     # lock
     sp = sub.add_parser("lock", help="Lock the study plan (immutable snapshot)")
     sp.add_argument("study_id")
+    sp.add_argument("--strict-ids", action="store_true",
+                    help="Block plan lock if duplicate patient IDs are present in ingested data")
     sp.add_argument("--allow-duplicate-ids", action="store_true",
                     help="Allow locking even when duplicate patient IDs are present "
                          "(use for longitudinal/repeated-measures designs where "

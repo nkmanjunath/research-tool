@@ -113,7 +113,7 @@ This distinction must be documented explicitly in any implementation manifest (e
 - `precomputations_advisory_cache.is_advisory = true`: these are UI acceleration hints only. Stage 3's execution engine always recomputes statistics fresh from raw data + rules at lock/execution time — never trusts this cache as authoritative.
 
 **Open follow-ups tied to existing backlog:**
-- `--strict-ids` duplicate-patient-id check → surfaced in Tab 1's ID-column mapping step.
+- `--strict-ids` duplicate-patient-id check → Implemented in `core.cli.main` (`lock` command `--strict-ids` flag) & surfaced in Tab 1's ID-column mapping step. Blocks plan lock when duplicate patient IDs exist.
 - `--na-values` custom sentinel flag → this *is* the `sentinels` block above.
 
 ---

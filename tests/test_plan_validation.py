@@ -262,3 +262,28 @@ def test_lock_no_duplicates_normal():
     cmd_lock(ns)
     locked = list(DATA_ROOT.glob(f"{STUDY_ID}/study_plan.v*.locked.json"))
     assert len(locked) >= 1
+
+
+def test_lock_strict_ids_blocks_duplicates(capsys):
+    """--strict-ids must abort with clear error message when duplicates exist."""
+    _setup_for_lock_test(with_duplicates=True)
+    from core.cli.main import cmd_lock
+    import argparse
+    ns = argparse.Namespace(study_id=STUDY_ID, strict_ids=True, allow_duplicate_ids=False)
+    with pytest.raises(SystemExit):
+        cmd_lock(ns)
+    err = capsys.readouterr().err
+    assert "duplicate patient identifiers found" in err
+    assert "P001" in err
+
+
+def test_lock_strict_ids_passes_when_unique():
+    """--strict-ids allows locking when patient IDs are unique."""
+    _setup_for_lock_test(with_duplicates=False)
+    from core.cli.main import cmd_lock
+    import argparse
+    ns = argparse.Namespace(study_id=STUDY_ID, strict_ids=True, allow_duplicate_ids=False)
+    cmd_lock(ns)
+    locked = list(DATA_ROOT.glob(f"{STUDY_ID}/study_plan.v*.locked.json"))
+    assert len(locked) >= 1
+
