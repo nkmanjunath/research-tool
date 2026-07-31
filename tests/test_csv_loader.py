@@ -305,3 +305,64 @@ def test_reingest_with_force_clears_and_reingests():
     cur = conn.execute("SELECT COUNT(*) AS cnt FROM variables WHERE study_id=?", (STUDY_ID,))
     assert cur.fetchone()["cnt"] == 0
     conn.close()
+
+
+def test_custom_na_values_flag_parses_as_missing():
+    """Custom sentinel (e.g. '-999') in --na-values is parsed as missing/NULL."""
+    content = _csv_content([
+        ["patient_id", "age", "income"],
+        ["P001", "45", "-999"],
+        ["P002", "50", "unknown"],
+    ])
+    tmp = DATA_ROOT / STUDY_ID / "_test_na.csv"
+    tmp.write_text(content)
+    load_file(STUDY_ID, str(tmp), na_values=["-999", "unknown"], force=True)
+    tmp.unlink()
+
+    conn = get_connection(STUDY_ID)
+    cur = conn.execute("SELECT income FROM raw_test_csv_loader ORDER BY row_id")
+    incomes = [r["income"] for r in cur.fetchall()]
+    conn.close()
+
+    assert incomes == [None, None]
+
+
+def test_custom_na_values_without_flag_treats_as_literal():
+    """Without na_values flag, '-999' is treated as literal value, not missing."""
+    content = _csv_content([
+        ["patient_id", "age", "income"],
+        ["P001", "45", "-999"],
+    ])
+    tmp = DATA_ROOT / STUDY_ID / "_test_na_literal.csv"
+    tmp.write_text(content)
+    load_file(STUDY_ID, str(tmp), force=True)
+    tmp.unlink()
+
+    conn = get_connection(STUDY_ID)
+    cur = conn.execute("SELECT income FROM raw_test_csv_loader ORDER BY row_id")
+    incomes = [r["income"] for r in cur.fetchall()]
+    conn.close()
+
+    assert incomes == ["-999"]
+
+
+def test_default_na_sentinels_work_with_and_without_flag():
+    """Default sentinels ('', 'NA', 'N/A') are parsed as missing with or without custom na_values."""
+    content = _csv_content([
+        ["patient_id", "age", "income"],
+        ["P001", "", "NA"],
+        ["P002", "N/A", "null"],
+    ])
+    tmp = DATA_ROOT / STUDY_ID / "_test_na_defaults.csv"
+    tmp.write_text(content)
+    load_file(STUDY_ID, str(tmp), na_values=["custom_sentinel"], force=True)
+    tmp.unlink()
+
+    conn = get_connection(STUDY_ID)
+    cur = conn.execute("SELECT age, income FROM raw_test_csv_loader ORDER BY row_id")
+    rows = cur.fetchall()
+    conn.close()
+
+    assert [r["age"] for r in rows] == [None, None]
+    assert [r["income"] for r in rows] == [None, None]
+
