@@ -178,6 +178,32 @@ def _run_gates(protocol: dict, fit_ok: bool, results: dict):
     tests.append({"test_name": "linearity_continuous_terms", "status": "PASS",
                    "details": f"NOTE: stubbed PASS — real Box-Tidwell check against {transforms or 'default-linear'} not wired yet."})
 
+    # EPV Check — using actual fitted predictor count (k)
+    k = len(results.get("coefficients", []))
+    e_eff = results.get("e_effective", 0)
+    epv = e_eff / max(k, 1) if k > 0 else 0.0
+
+    if epv < 5.0:
+        tests.append({
+            "test_name": "events_per_variable_epv",
+            "status": "WARNING",
+            "metric_value": round(epv, 2),
+            "details": f"EPV is {epv:.2f} (< 5.0 threshold) — severe parameter instability and potential overfitting.",
+        })
+    elif epv < 10.0:
+        tests.append({
+            "test_name": "events_per_variable_epv",
+            "status": "WARNING",
+            "metric_value": round(epv, 2),
+            "details": f"EPV is {epv:.2f} (< 10.0 threshold) — potential parameter instability; interpretations should be cautious.",
+        })
+    else:
+        tests.append({
+            "test_name": "events_per_variable_epv",
+            "status": "PASS",
+            "metric_value": round(epv, 2),
+        })
+
     statuses = {t["status"] for t in tests}
     overall = "FAIL" if "FAIL" in statuses else ("WARNING" if "WARNING" in statuses else "PASS")
     return overall, tests

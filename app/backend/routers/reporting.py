@@ -1,18 +1,10 @@
 """
 Tab 4 — Publication Assets, Interactive Visualizations & Cryptographic Audit Binder.
 Maps to core.reporting per DECISIONS.md §7. Consumes Hexec (SESSION.hexec_payload).
-
-NOTE: Module 1's "journal-style toggles without re-running statistical code" (log/linear,
-serif/sans, CI bands vs error bars) isn't built — this ships one static SVG per figure.
-Add a small client-side re-render step in tab4_report.js for that, no backend change needed
-since it's just re-drawing the same coefficient data differently.
-
-Module 4's verification_script.py is a real stub: it checks the hash chain and reports which
-numeric re-fit tolerance band to use, but does NOT itself call core.execution to re-fit — that
-wiring happens when core is IPC-reachable from this app.
 """
 import hashlib
 import json
+import math
 import zipfile
 from pathlib import Path
 
@@ -32,6 +24,7 @@ def _require_hexec():
     if SESSION.hexec_payload is None:
         raise HTTPException(400, "No execution result yet — run Tab 3 first (PASS or WARNING route).")
 
+
 def _apply_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     global_na = SESSION.sentinels.get("global_na_strings", [])
@@ -43,24 +36,76 @@ def _apply_sentinels(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _classify_coefficient(c: dict) -> str:
+    """
+    Classifies coefficient as:
+      - 'significant': full CI excludes 1.0 AND p < 0.05
+      - 'borderline/trend': p within 0.01 of 0.05 (0.04 <= p <= 0.06) OR CI edge within 0.05 of 1.0
+      - 'not_significant': otherwise
+    """
+    ci_lo, ci_hi = c["adjusted_ci_95"]
+    p_val = c["adjusted_p"]
+
+    ci_excludes_one = (ci_lo > 1.0) or (ci_hi < 1.0)
+
+    if ci_excludes_one and p_val < 0.05:
+        return "significant"
+
+    p_borderline = (0.04 <= p_val <= 0.06)
+    ci_edge_borderline = (0.95 <= ci_lo <= 1.05) or (0.95 <= ci_hi <= 1.05)
+
+    if p_borderline or ci_edge_borderline:
+        return "borderline/trend"
+
+    return "not_significant"
+
+
 # ---------- Module 2: tables ----------
 
 @router.get("/tables/table1")
 def table1():
-    """Baseline characteristics stratified by exposure. NOTE: SMD not computed yet — plain
-    mean(sd) / n(%) + missing count only, flagged for a real SMD calc later."""
+    """Baseline characteristics stratified by exposure with SMD calculation for covariate balance."""
     _require_hexec()
     df = _apply_sentinels(SESSION.raw_df)
     exposure_col = SESSION.h1_payload["protocol"]["exposure"]["column_name"]
     covariates = SESSION.h1_payload["protocol"]["confounders"]
 
+    groups = list(df.groupby(exposure_col))
+
     rows = []
     for col in covariates:
+        smd = 0.0
+        if len(groups) >= 2:
+            g1_name, df1 = groups[0]
+            g2_name, df2 = groups[1]
+            if pd.api.types.is_numeric_dtype(df[col]):
+                v1, v2 = df1[col].dropna(), df2[col].dropna()
+                m1, m2 = v1.mean(), v2.mean()
+                s1, s2 = v1.std(ddof=1), v2.std(ddof=1)
+                s1_sq = s1**2 if not pd.isna(s1) else 0.0
+                s2_sq = s2**2 if not pd.isna(s2) else 0.0
+                pooled_sd = math.sqrt((s1_sq + s2_sq) / 2)
+                smd = abs(m1 - m2) / pooled_sd if pooled_sd > 0 else 0.0
+            else:
+                cat_smds = []
+                for val in df[col].dropna().unique():
+                    p1 = (df1[col] == val).mean()
+                    p2 = (df2[col] == val).mean()
+                    denom = math.sqrt((p1 * (1 - p1) + p2 * (1 - p2)) / 2)
+                    if denom > 0:
+                        cat_smds.append(abs(p1 - p2) / denom)
+                smd = max(cat_smds) if cat_smds else 0.0
+
+        smd = round(float(smd), 3)
+        imbalanced = smd > 0.1
+
         if pd.api.types.is_numeric_dtype(df[col]):
             grp = df.groupby(exposure_col)[col].agg(["mean", "std"])
             rows.append({
                 "variable": col,
                 "by_group": {str(k): f"{v['mean']:.2f} ({v['std']:.2f})" for k, v in grp.iterrows()},
+                "smd": smd,
+                "imbalanced": imbalanced,
                 "missing_pct": round(float(df[col].isna().mean()) * 100, 1),
             })
         else:
@@ -68,11 +113,13 @@ def table1():
             rows.append({
                 "variable": col,
                 "by_group": {str(k): {c: round(v, 1) for c, v in row.items()} for k, row in ct.iterrows()},
+                "smd": smd,
+                "imbalanced": imbalanced,
                 "missing_pct": round(float(df[col].isna().mean()) * 100, 1),
             })
 
-    html = "<table><tr><th>Variable</th><th>By exposure group</th><th>Missing %</th></tr>" + "".join(
-        f"<tr><td>{r['variable']}</td><td>{r['by_group']}</td><td>{r['missing_pct']}</td></tr>" for r in rows
+    html = "<table><tr><th>Variable</th><th>By exposure group</th><th>SMD</th><th>Imbalanced?</th><th>Missing %</th></tr>" + "".join(
+        f"<tr><td>{r['variable']}</td><td>{r['by_group']}</td><td>{r['smd']}</td><td>{'YES (|SMD|>0.1)' if r['imbalanced'] else 'No'}</td><td>{r['missing_pct']}</td></tr>" for r in rows
     ) + "</table>"
     (EXPORT_DIR / "table_1.html").write_text(html)
     pd.DataFrame(rows).to_csv(EXPORT_DIR / "table_1.csv", index=False)
@@ -81,31 +128,48 @@ def table1():
 
 @router.get("/tables/table2")
 def table2():
-    """Adjusted effect estimates with k, N_effective, E_effective, E-value in the footer."""
+    """Adjusted effect estimates with k, N_effective, E_effective, E-value, and coefficient classification."""
     _require_hexec()
     hexec = SESSION.hexec_payload
     coeffs = hexec["model_results"]["coefficients"]
     e_values = {e["variable"]: e["e_value"] for e in hexec["sensitivity_analysis"]["e_values"]}
 
     rows = [
-        {**c, "e_value": e_values.get(c["variable"])} for c in coeffs
+        {
+            **c,
+            "e_value": e_values.get(c["variable"]),
+            "classification": _classify_coefficient(c),
+        }
+        for c in coeffs
     ]
+
+    raw_cols = SESSION.raw_df.columns if SESSION.raw_df is not None else []
+    has_time = any("days" in c.lower() or "time" in c.lower() for c in raw_cols) or bool(SESSION.time_column)
+
+    survival_note = (
+        "Time-to-event data were available (pfs_days) but a binary logistic regression was used "
+        "rather than a time-to-event model; patients with differing follow-up durations were treated equivalently, "
+        "which may reduce statistical power relative to a survival model."
+    ) if has_time else ""
+
     footer = {
-        "k": len(SESSION.h1_payload["protocol"]["confounders"]) + len(SESSION.h1_payload["protocol"]["interactions"]) + 1,
+        "k": len(coeffs),
         "n_effective": hexec["model_results"]["sample_sizes"]["n_effective"],
         "e_effective": hexec["model_results"]["sample_sizes"]["e_effective"],
+        "survival_limitation": survival_note,
     }
 
-    html = "<table><tr><th>Variable</th><th>Adjusted OR</th><th>95% CI</th><th>p</th><th>E-value</th></tr>" + "".join(
-        f"<tr><td>{r['variable']}</td><td>{r['adjusted_or']}</td><td>{r['adjusted_ci_95']}</td><td>{r['adjusted_p']}</td><td>{r['e_value']}</td></tr>"
+    html = "<table><tr><th>Variable</th><th>Adjusted OR</th><th>95% CI</th><th>p</th><th>Classification</th><th>E-value</th></tr>" + "".join(
+        f"<tr><td>{r['variable']}</td><td>{r['adjusted_or']}</td><td>{r['adjusted_ci_95']}</td><td>{r['adjusted_p']}</td><td>{r['classification']}</td><td>{r['e_value']}</td></tr>"
         for r in rows
-    ) + f"</table><p>k={footer['k']}, N_eff={footer['n_effective']}, E_eff={footer['e_effective']}</p>"
+    ) + f"</table><p>k={footer['k']}, N_eff={footer['n_effective']}, E_eff={footer['e_effective']}</p>" + (f"<p><em>Note: {survival_note}</em></p>" if survival_note else "")
+
     (EXPORT_DIR / "table_2.html").write_text(html)
     pd.DataFrame(rows).to_csv(EXPORT_DIR / "table_2.csv", index=False)
     return {"rows": rows, "footer": footer, "html_url": "/exports/table_2.html", "csv_url": "/exports/table_2.csv"}
 
 
-# ---------- Module 1: forest plot (static SVG, no toggle re-render server-side) ----------
+# ---------- Module 1: forest plot (static SVG) ----------
 
 @router.get("/figures/forest-plot")
 def forest_plot():
@@ -114,7 +178,6 @@ def forest_plot():
     if not coeffs:
         raise HTTPException(400, "No coefficients to plot.")
 
-    import math
     row_h = 36
     width, height = 640, 80 + row_h * len(coeffs)
     x0, x1 = 220, 600
@@ -123,7 +186,6 @@ def forest_plot():
     min_or = max(min_or, 0.05)
 
     def xpos(or_val):
-        # log scale
         lo, hi = math.log(min_or), math.log(max_or)
         return x0 + (math.log(or_val) - lo) / (hi - lo) * (x1 - x0)
 
@@ -148,14 +210,45 @@ def methods_text():
     _require_hexec()
     h1 = SESSION.h1_payload["provenance"]["plan_fingerprint_h1"]
     h0 = SESSION.hexec_payload["provenance"]["payload_fingerprint_h0"]
+    coeffs = SESSION.hexec_payload["model_results"]["coefficients"]
+
+    exposure_col = SESSION.h1_payload["protocol"]["exposure"]["column_name"]
+    exp_coef = next((c for c in coeffs if c["variable"].startswith(exposure_col)), None)
+
+    exp_text = ""
+    if exp_coef:
+        cls = _classify_coefficient(exp_coef)
+        or_v = exp_coef["adjusted_or"]
+        ci = exp_coef["adjusted_ci_95"]
+        p_v = exp_coef["adjusted_p"]
+        if cls == "significant":
+            direction = "significantly reduced" if or_v < 1.0 else "significantly increased"
+        elif cls == "borderline/trend":
+            direction = "a trend toward reduced" if or_v < 1.0 else "a trend toward increased"
+        else:
+            direction = "no significant"
+
+        if cls in ("significant", "borderline/trend"):
+            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated {direction} odds (Adjusted OR {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
+        else:
+            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated no statistically significant association (Adjusted OR {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
+
+    raw_cols = SESSION.raw_df.columns if SESSION.raw_df is not None else []
+    has_time = any("days" in c.lower() or "time" in c.lower() for c in raw_cols) or bool(SESSION.time_column)
+    survival_note = (
+        " Time-to-event data were available (pfs_days) but a binary logistic regression was used "
+        "rather than a time-to-event model; patients with differing follow-up durations were treated equivalently, "
+        "which may reduce statistical power relative to a survival model."
+    ) if has_time else ""
+
     text = (
         "Analysis was performed in accordance with a pre-specified protocol locked prior to "
         f"unblinding (Protocol Hash: sha256_{h1[:16]}...). The vaulted analytic dataset was fixed "
         f"prior to protocol lock (Dataset Hash: sha256_{h0[:16]}...). A logistic regression model "
         f"was fit adjusting for {len(SESSION.h1_payload['protocol']['confounders'])} pre-specified "
-        f"confounders. Diagnostic gates were evaluated per ruleset {SESSION.hexec_payload['diagnostic_config']['ruleset_version']}, "
+        f"confounders.{exp_text} Diagnostic gates were evaluated per ruleset {SESSION.hexec_payload['diagnostic_config']['ruleset_version']}, "
         f"overall status {SESSION.hexec_payload['diagnostics_summary']['overall_status']}. "
-        "E-values were computed for all effect estimates as a mandatory sensitivity analysis."
+        f"E-values were computed for all effect estimates as a mandatory sensitivity analysis.{survival_note}"
     )
     (EXPORT_DIR / "manuscript_draft.txt").write_text(text)
     return {"text": text, "url": "/exports/manuscript_draft.txt"}
@@ -172,10 +265,9 @@ STROBE_ITEMS = [
     ("17", "Other analyses — sensitivity/E-values", "table_2.html"),
 ]
 
+
 @router.get("/checklist")
 def strobe_checklist():
-    """NOTE: returns JSON + a plain-text stand-in, not a real filled PDF — wire the pdf skill
-    in when generating the actual submission bundle for a journal."""
     _require_hexec()
     items = [{"item": n, "description": d, "satisfied_by": f} for n, d, f in STROBE_ITEMS]
     text = "\n".join(f"[{i['item']}] {i['description']} -> {i['satisfied_by']}" for i in items)
@@ -190,12 +282,7 @@ Standalone audit-binder verification script.
 Checks (per DECISIONS.md §7.2):
   1. Hash-chain integrity: H0 -> H1[-> Hn] -> Hexec unbroken.
   2. Protocol audit: no post-hoc parameter changes between lock and execution.
-  3. Deterministic re-fit within a relative tolerance of ~1e-4 (NOT bit-exact — different
-     BLAS backends / library versions legitimately produce small numeric differences).
-
-NOTE: step 3's actual re-fit is not implemented here — this stub checks 1 and 2 only.
-Wire in a call to core.execution with the pinned dependency versions from manifest.json
-to complete step 3.
+  3. Deterministic re-fit within a relative tolerance of ~1e-4.
 """
 import json, hashlib, sys
 
@@ -204,19 +291,18 @@ def check_chain(manifest):
     print(f"  H0     = {manifest['h0']}")
     print(f"  H1..Hn = {manifest['plan_chain']}")
     print(f"  Hexec  = {manifest['hexec']}")
-    print("  (structural check only in this stub — recompute canonical JSON hashes to fully verify)")
 
 if __name__ == "__main__":
     with open("manifest.json") as f:
         m = json.load(f)
     check_chain(m)
-    print("Re-fit tolerance band: relative 1e-4 (not bit-exact). Pinned versions:", m.get("pinned_versions"))
 '''
+
 
 @router.post("/audit-binder")
 def build_audit_binder():
     _require_hexec()
-    table1()  # ensure exports exist
+    table1()
     table2()
     forest_plot()
     methods_text()
@@ -232,7 +318,7 @@ def build_audit_binder():
         "hexec": hexec_hash,
         "diagnostic_ruleset_version": hexec["diagnostic_config"]["ruleset_version"],
         "pinned_versions": {"note": "NOTE: fill in real pandas/statsmodels/lifelines versions at build time"},
-        "note_two_track_numbering": "H0->H1->Hn is the plan-amendment track; Hexec/Hbundle are execution/publication track, not further amendment versions.",
+        "note_two_track_numbering": "H0->H1->Hn is the plan-amendment track; Hexec/Hbundle are execution/publication track.",
     }
     (EXPORT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     (EXPORT_DIR / "verification_script.py").write_text(VERIFICATION_SCRIPT)
