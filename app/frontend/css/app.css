@@ -80,14 +80,15 @@ main { padding: 32px 24px 80px; max-width: 960px; margin: 0 auto; }
 .grid { display: flex; flex-direction: column; gap: 20px; }
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: rgba(17, 24, 39, 0.75);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius);
   padding: 20px 24px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.2s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.2s ease, transform 0.2s ease;
 }
-.card:hover { border-color: rgba(255, 255, 255, 0.2); }
+.card:hover { border-color: rgba(14, 165, 233, 0.3); }
 .card h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: #F8FAFC; }
 .card h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
 .hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
@@ -101,70 +102,43 @@ textarea {
   background: var(--surface-2);
   color: var(--text);
   padding: 10px 12px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-textarea:focus {
-  outline: none;
-  border-color: var(--teal);
-  box-shadow: 0 0 8px rgba(14, 165, 233, 0.3);
 }
 
-hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
-
-.mirror {
-  margin-top: 10px;
-  padding: 12px 14px;
-  border-left: 3px solid var(--gold);
-  background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12px;
-  font-style: italic;
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-
-.gate-row { padding: 8px 0; border-bottom: 1px solid var(--line); font-family: 'Fira Code', monospace; }
-.gate-row:last-child { border-bottom: none; }
-.gate-pass strong { color: var(--emerald); }
-.gate-warn strong { color: var(--gold); }
-.gate-fail strong { color: var(--fail); }
-.gate-na strong { color: var(--muted); }
-
-.card.fail {
-  border-color: var(--fail);
-  box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
-}
-
-input, select, button {
-  font-size: 13px;
-  padding: 9px 12px;
+input, select {
+  font-family: inherit;
+  margin: 4px 0;
   border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text);
-  transition: all 0.2s ease;
+  padding: 8px 12px;
 }
-input, select { margin: 4px 8px 4px 0; }
-input:focus, select:focus {
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--teal);
-  box-shadow: 0 0 8px rgba(14, 165, 233, 0.25);
+  box-shadow: 0 0 0 2px rgba(14, 165, 233, 0.25);
 }
 
 button {
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 8px 16px;
   cursor: pointer;
-  background: var(--teal);
-  border-color: var(--teal);
-  color: #FFFFFF;
   font-weight: 500;
+  margin-top: 8px;
+  transition: all 0.15s ease;
 }
 button:hover {
-  filter: brightness(1.15);
-  box-shadow: 0 0 10px rgba(14, 165, 233, 0.4);
+  background: #334155;
+  border-color: var(--muted);
 }
 button.lock {
-  background: var(--gold);
-  border-color: var(--gold);
-  color: #0F172A;
+  background: linear-gradient(135deg, var(--gold), #D97706);
+  color: #000;
+  border: none;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
@@ -218,3 +192,27 @@ button.lock:hover {
   font-size: 12px;
   font-weight: 600;
 }
+
+.journal-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.journal-table th, .journal-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.journal-table th {
+  background: rgba(17, 24, 39, 0.9);
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.journal-table tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+.badge-pass { border-color: var(--emerald); color: var(--emerald); background: rgba(16, 185, 129, 0.1); }
+.badge-warn { border-color: var(--gold); color: var(--gold); background: rgba(245, 158, 11, 0.1); }

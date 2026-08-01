@@ -316,9 +316,36 @@ def _run_gates(protocol: dict, fit_ok: bool, results: dict):
     return overall, tests
 
 
+def _e_value_calc(est: float) -> float:
+    """Computes E-value for a single risk ratio / odds ratio / hazard ratio estimate."""
+    if est <= 0 or pd.isna(est):
+        return 1.0
+    rr = est if est >= 1.0 else 1.0 / est
+    return round(rr + math.sqrt(rr * (rr - 1.0)), 3) if rr > 1.0 else 1.0
+
+
+def _e_value_dual(est: float, ci_lo: float, ci_hi: float) -> dict:
+    """
+    Computes point-estimate E-value and CI limit E-value per VanderWeele & Ding (2017).
+    If 95% CI includes 1.0 (ci_lo <= 1.0 <= ci_hi), E-value for CI limit is 1.000.
+    Otherwise, computes E-value for the bound closest to 1.0.
+    """
+    e_est = _e_value_calc(est)
+    if ci_lo <= 1.0 <= ci_hi:
+        e_ci = 1.000
+    else:
+        closest_bound = ci_hi if est < 1.0 else ci_lo
+        e_ci = _e_value_calc(closest_bound)
+
+    return {
+        "e_value": e_est,
+        "e_value_ci": e_ci,
+        "formatted": f"{e_est:.3f} (CI bound: {e_ci:.3f})"
+    }
+
+
 def _e_value(or_estimate: float) -> float:
-    rr = or_estimate if or_estimate >= 1 else 1 / or_estimate
-    return round(rr + math.sqrt(rr * (rr - 1)), 3) if rr > 1 else 1.0
+    return _e_value_calc(or_estimate)
 
 
 @router.post("/run")
@@ -355,7 +382,10 @@ def run_execution():
         }
 
     e_values = [
-        {"variable": c["variable"], "e_value": _e_value(c["adjusted_or"])}
+        {
+            "variable": c["variable"],
+            **_e_value_dual(c["adjusted_or"], c["adjusted_ci_95"][0], c["adjusted_ci_95"][1])
+        }
         for c in results["coefficients"]
     ]
 

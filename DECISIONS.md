@@ -197,6 +197,7 @@ This distinction must be documented explicitly in any implementation manifest (e
 | 2. Multicollinearity (VIF) | VIF per covariate | Warning: VIF 5.0–10.0. Fail: VIF > 10.0 |
 | 3. Proportional Hazards | Schoenfeld residuals (survival models only) | Warning: global or per-covariate p ∈ [0.01, 0.05). Fail: p < 0.01 |
 | 4. Linearity of continuous terms | Box-Tidwell / CCPR residuals, evaluated **against `Stage2Payload.protocol.pre_specified_transforms`** | Fail only if non-linearity is significant *and* a linear term (not a pre-specified spline/transform) was locked — prevents post-hoc curve-fitting without an amendment |
+| 5. Events Per Variable (EPV) | E_effective / k parameters | Warning: EPV 5.0–10.0. Fail: EPV < 5.0 (routes to Autopsy Canvas) |
 
 **Gate 4 is structurally different from Gates 1–3:** it is not a bare statistical test. Its pass/fail depends on what was pre-registered in the locked plan. Implementers must not build Gate 4 as a standalone test that ignores `pre_specified_transforms` — doing so would silently reopen a post-hoc-curve-fitting loophole the rest of the system is designed to close.
 
@@ -652,6 +653,26 @@ Audit of full codebase identified 5 dead-code items for removal and 2 items conf
 ### Confirmed Intentional / Retained (2 items)
 1. **`MaskedDataError` (`core/masking/gate.py:25`)**: Reserved domain exception for outcome data access violations before lock.
 2. **`unmask_study` (`core/planning/lock.py:117`)**: Intentional facade wrapper over `core.masking.gate.unmask_study`.
+
+---
+
+## 18. Architectural Revision: EPV Hard-Gate Enforcement (< 5.0 FAIL / Autopsy Routing)
+
+**Date:** 2026-08-01  
+**Scope:** `app/backend/routers/execution.py` (`_run_gates`), `app/backend/routers/planning.py` (`epv_live`), and Diagnostic Suite.
+
+### What Changed
+- **Original Decision (§4 / §6.1)**: Events-per-variable (EPV) was initially designed as a non-enforced advisory metric in Tab 2 to inform investigator choices without blocking execution.
+- **Revised Policy**: 
+  - $\text{EPV} < 5.0$ is now enforced as an active **hard diagnostic gate failure (`events_per_variable_epv`, status: FAIL)**. Execution halts immediately and routes to the **Autopsy Canvas**, requiring the investigator to submit a formal protocol amendment in Tab 2 (reducing parameter count $k$ or adjusting cohort scope) before any publication package can be generated.
+  - $5.0 \le \text{EPV} < 10.0$ generates a **status: WARNING**, proceeding to publication asset generation with auto-injected limitation text in the manuscript draft and Supplementary Table S1.
+  - $\text{EPV} \ge 10.0$ generates a **status: PASS**.
+
+### Why It Changed
+- **Trigger**: Real-world pipeline runs on small synthetic test fixtures (e.g. `synthetic_21` with $N=21, E=5, k=4 \Rightarrow \text{EPV} = 1.25$) produced misleadingly clean `PASS` routes despite severe non-identifiability, extreme standard error inflation, and unstable coefficient estimation.
+- **Rigor Justification**: Allowing studies with $\text{EPV} < 5.0$ to pass through to Tab 4 publication asset generation created an unacceptable risk of generating "publication-ready" tables for statistically invalid models. In clinical literature (Peduzzi et al., 1996; Vittinghoff & McCulloch, 2007), $\text{EPV} < 5.0$ results in severe bias, invalid confidence intervals, and high rates of type I/II error.
+- **Governance**: Upgrading $\text{EPV} < 5.0$ to a hard gate ensures that pre-registered protocol amendments are cryptographically logged in the DAG (`H1 -> H2...Hn`), preventing undocumented model over-fitting and preserving the integrity of the audit binder.
+
 
 
 
