@@ -12,6 +12,10 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+# REUSED FROM core.reporting & core.reporting.forest_plot
+from core.reporting import format_label as _core_format_label
+from core.reporting.forest_plot import COVARIATE_LABEL_MAP, COVARIATE_UNIT_MAP
+
 from state import SESSION
 
 router = APIRouter()
@@ -34,6 +38,51 @@ def _apply_sentinels(df: pd.DataFrame) -> pd.DataFrame:
         if na_list:
             out[col] = out[col].replace(na_list, pd.NA)
     return out
+
+
+def get_display_label(var: str) -> str:
+    """
+    Returns a publication-grade clinical label for a model variable.
+    REUSED FROM core.reporting.forest_plot (COVARIATE_LABEL_MAP, COVARIATE_UNIT_MAP, format_label).
+    """
+    # Check interaction terms
+    if ":" in var or "*" in var:
+        parts = [get_display_label(p.strip()) for p in var.replace("*", ":").split(":") if p.strip()]
+        return " × ".join(parts)
+
+    # Check known categorical dummy-encoded variables
+    known_bases = ["treatment_arm", "high_risk_fish", "iss_stage", "prior_lines", "sex"]
+    for base in known_bases:
+        if var.startswith(base + "_"):
+            level = var[len(base) + 1:]
+            base_label = COVARIATE_LABEL_MAP.get(base, _core_format_label(base))
+
+            if base == "treatment_arm":
+                return f"{base_label}: {level} (vs Arm A)"
+            elif base == "high_risk_fish":
+                ref = "No" if level.lower() == "yes" else "Yes"
+                return f"{base_label} ({level.capitalize()} vs {ref})"
+            elif base == "iss_stage":
+                ref = "Stage I" if level in ("II", "III") else "Stage I"
+                return f"{base_label} {level} (vs {ref})"
+            elif base == "sex":
+                ref = "Female" if level == "M" else "Male"
+                level_str = "Male" if level == "M" else "Female"
+                return f"Sex: {level_str} (vs {ref})"
+            else:
+                return f"{base_label}: {level}"
+
+    # General dummy variable fallback: name_LEVEL
+    if "_" in var:
+        parts = var.rsplit("_", 1)
+        base, level = parts[0], parts[1]
+        base_label = COVARIATE_LABEL_MAP.get(base, _core_format_label(base))
+        return f"{base_label}: {level}"
+
+    # Continuous variable
+    base_label = COVARIATE_LABEL_MAP.get(var, _core_format_label(var))
+    unit_str = COVARIATE_UNIT_MAP.get(var, "per 1-unit increase")
+    return f"{base_label} ({unit_str})"
 
 
 def _classify_coefficient(c: dict) -> str:
@@ -64,7 +113,7 @@ def _classify_coefficient(c: dict) -> str:
 
 @router.get("/tables/table1")
 def table1():
-    """Baseline characteristics stratified by exposure with SMD calculation for covariate balance."""
+    """Baseline characteristics stratified by exposure with SMD calculation and n (%) formatting."""
     _require_hexec()
     df = _apply_sentinels(SESSION.raw_df)
     exposure_col = SESSION.h1_payload["protocol"]["exposure"]["column_name"]
@@ -108,17 +157,25 @@ def table1():
                 by_group_dict[str(k)] = f"{v['mean']:.2f} ({v['std']:.2f})"
             rows.append({
                 "variable": col,
+                "display_label": get_display_label(col),
                 "by_group": by_group_dict,
                 "smd": smd,
                 "imbalanced": imbalanced,
                 "missing_pct": round(float(df[col].isna().mean()) * 100, 1),
             })
         else:
-            ct = pd.crosstab(df[exposure_col], df[col], normalize="index") * 100
-            for k, row in ct.iterrows():
-                by_group_dict[str(k)] = ", ".join(f"{c}: {round(v, 1)}%" for c, v in row.items())
+            ct_counts = pd.crosstab(df[exposure_col], df[col])
+            ct_pct = pd.crosstab(df[exposure_col], df[col], normalize="index") * 100
+            for k in ct_counts.index:
+                items = []
+                for cat in ct_counts.columns:
+                    n_cnt = int(ct_counts.loc[k, cat])
+                    pct = float(ct_pct.loc[k, cat])
+                    items.append(f"{cat}: {n_cnt} ({pct:.1f}%)")
+                by_group_dict[str(k)] = ", ".join(items)
             rows.append({
                 "variable": col,
+                "display_label": get_display_label(col),
                 "by_group": by_group_dict,
                 "smd": smd,
                 "imbalanced": imbalanced,
@@ -128,8 +185,8 @@ def table1():
     g1_hdr = f"{group_names[0]}" if len(group_names) > 0 else "Arm A"
     g2_hdr = f"{group_names[1]}" if len(group_names) > 1 else "Arm B"
 
-    html = f"<table><tr><th>Variable</th><th>{g1_hdr}</th><th>{g2_hdr}</th><th>SMD</th><th>Balance Status</th><th>Missing %</th></tr>" + "".join(
-        f"<tr><td><strong>{r['variable']}</strong></td>"
+    html = f"<table><tr><th>Characteristic</th><th>{g1_hdr}</th><th>{g2_hdr}</th><th>SMD</th><th>Balance Status</th><th>Missing %</th></tr>" + "".join(
+        f"<tr><td><strong>{r['display_label']}</strong></td>"
         f"<td>{r['by_group'].get(group_names[0], 'N/A') if len(group_names)>0 else 'N/A'}</td>"
         f"<td>{r['by_group'].get(group_names[1], 'N/A') if len(group_names)>1 else 'N/A'}</td>"
         f"<td>{r['smd']:.3f}</td>"
@@ -145,7 +202,7 @@ def table1():
 
 @router.get("/tables/table2")
 def table2():
-    """Adjusted effect estimates with k, N_effective, E_effective, VanderWeele Dual E-value, and coefficient classification."""
+    """Adjusted effect estimates with clean clinical labels, k, N_effective, E_effective, VanderWeele Dual E-value, and classification."""
     _require_hexec()
     hexec = SESSION.hexec_payload
     coeffs = hexec["model_results"]["coefficients"]
@@ -157,6 +214,7 @@ def table2():
     rows = [
         {
             **c,
+            "display_label": get_display_label(c["variable"]),
             "e_value_formatted": e_map.get(c["variable"], "1.000 (CI bound: 1.000)"),
             "classification": _classify_coefficient(c),
         }
@@ -185,7 +243,7 @@ def table2():
     }
 
     html = f"<table><tr><th>Variable</th><th>{effect_label}</th><th>95% CI</th><th>p</th><th>Classification</th><th>E-value (CI bound)</th></tr>" + "".join(
-        f"<tr><td><strong>{r['variable']}</strong></td><td>{r['adjusted_or']}</td><td>[{r['adjusted_ci_95'][0]}, {r['adjusted_ci_95'][1]}]</td><td>{r['adjusted_p']}</td><td>{r['classification']}</td><td>{r['e_value_formatted']}</td></tr>"
+        f"<tr><td><strong>{r['display_label']}</strong></td><td>{r['adjusted_or']}</td><td>[{r['adjusted_ci_95'][0]}, {r['adjusted_ci_95'][1]}]</td><td>{r['adjusted_p']}</td><td>{r['classification']}</td><td>{r['e_value_formatted']}</td></tr>"
         for r in rows
     ) + f"</table><p>Model: {model_type}, k={footer['k']}, N_eff={footer['n_effective']}, E_eff={footer['e_effective']}</p>" + (f"<p><em>Note: {survival_note}</em></p>" if survival_note else "")
 
@@ -207,9 +265,9 @@ def forest_plot():
 
     row_h = 38
     axis_h = 60
-    width = 660
+    width = 720
     height = 70 + row_h * len(coeffs) + axis_h
-    x0, x1 = 200, 620
+    x0, x1 = 260, 680
 
     max_or = max(c["adjusted_ci_95"][1] for c in coeffs) * 1.2
     min_or = min(c["adjusted_ci_95"][0] for c in coeffs) * 0.8
@@ -232,10 +290,11 @@ def forest_plot():
         lo, hi, est = c["adjusted_ci_95"][0], c["adjusted_ci_95"][1], c["adjusted_or"]
         pval = c["adjusted_p"]
         var_name = c["variable"]
-        tooltip = f"{var_name}: Estimate={est:.3f} (95% CI [{lo:.3f}, {hi:.3f}], p={pval:.4f})"
+        display_name = get_display_label(var_name)
+        tooltip = f"{display_name}: Estimate={est:.3f} (95% CI [{lo:.3f}, {hi:.3f}], p={pval:.4f})"
 
         lines.append(f'<g><title>{tooltip}</title>')
-        lines.append(f'<text x="10" y="{y+4}" fill="#f3f4f6" font-family="monospace" font-size="12">{var_name}</text>')
+        lines.append(f'<text x="10" y="{y+4}" fill="#f3f4f6" font-family="monospace" font-size="11">{display_name}</text>')
         lines.append(f'<line x1="{xpos(lo)}" y1="{y}" x2="{xpos(hi)}" y2="{y}" stroke="#f59e0b" stroke-width="2" />')
         lines.append(f'<circle cx="{xpos(est)}" cy="{y}" r="5" fill="#f59e0b" /><title>{tooltip}</title></g>')
 
@@ -303,7 +362,7 @@ def methods_text():
         if val < 5.0:
             epv_note = f" Critical Methodological Caveat: The fitted model has an EPV of {val:.2f} (< 5.0 threshold), introducing severe parameter instability, potential overfitting, and inflated confidence interval widths; all point estimates must be interpreted with extreme caution."
         else:
-            epv_note = f" Methodological Caveat: The fitted model has an EPV of {val:.2f} (< 10.0 threshold), indicating potential parameter instability and reduced precision."
+            epv_note = f" Methodological Caveat: With EPV of {val:.2f} (< 10.0 threshold), effect estimates may be subject to coefficient shrinkage and inflated variance; confidence intervals should be interpreted as wider than nominal 95% coverage would suggest under adequately powered conditions."
 
     text = (
         "Analysis was performed in accordance with a pre-specified protocol locked prior to "

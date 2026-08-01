@@ -10,6 +10,7 @@ Unit tests for the statistical reporting & analytical pipeline fixes:
 8. Dynamic language engine (strict 'odds' for Logistic, 'hazard' for Cox PH)
 9. Forest plot SVG log-scaled X-axis, ticks, and axis titles
 10. Tab 2 amendment workflow: FAIL -> prepare_amendment -> amendment_state -> lock_stage2 (was_amended: True) -> re-run execution
+11. Clinical display label formatting reusing core COVARIATE_LABEL_MAP / COVARIATE_UNIT_MAP
 """
 import math
 import sys
@@ -31,7 +32,7 @@ from routers.execution import (
     run_execution,
 )
 from routers.planning import lock_stage2
-from routers.reporting import _classify_coefficient, forest_plot, methods_text
+from routers.reporting import _classify_coefficient, forest_plot, get_display_label, methods_text
 from state import SESSION
 
 
@@ -297,3 +298,14 @@ def test_tab2_amendment_end_to_end_flow():
     exec_res2 = run_execution()
     assert exec_res2["route"] in ("PUBLICATION_PACKAGE", "PUBLICATION_PACKAGE_WITH_LIMITATIONS")
     assert exec_res2["provenance"]["was_amended"] is True
+
+
+def test_clinical_display_label_formatting():
+    """Test 11: get_display_label() formats dummy and continuous variables into publication-grade labels."""
+    assert "ISS Stage II (vs Stage I)" in get_display_label("iss_stage_II")
+    assert "High-Risk Cytogenetics (Yes vs No)" in get_display_label("high_risk_fish_yes")
+    assert "Treatment Group: B (vs Arm A)" in get_display_label("treatment_arm_B")
+
+    age_label = get_display_label("age")
+    assert "Age, years" in age_label
+    assert "Per year increase" in age_label
