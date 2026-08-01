@@ -132,7 +132,10 @@ def table2():
     _require_hexec()
     hexec = SESSION.hexec_payload
     coeffs = hexec["model_results"]["coefficients"]
+    model_type = hexec["model_results"].get("model_type", "logistic_regression")
     e_values = {e["variable"]: e["e_value"] for e in hexec["sensitivity_analysis"]["e_values"]}
+
+    effect_label = "Adjusted HR" if model_type == "cox_ph" else "Adjusted OR"
 
     rows = [
         {
@@ -146,23 +149,28 @@ def table2():
     raw_cols = SESSION.raw_df.columns if SESSION.raw_df is not None else []
     has_time = any("days" in c.lower() or "time" in c.lower() for c in raw_cols) or bool(SESSION.time_column)
 
-    survival_note = (
-        "Time-to-event data were available (pfs_days) but a binary logistic regression was used "
-        "rather than a time-to-event model; patients with differing follow-up durations were treated equivalently, "
-        "which may reduce statistical power relative to a survival model."
-    ) if has_time else ""
+    survival_note = ""
+    if has_time and model_type == "logistic_regression":
+        survival_note = (
+            "Time-to-event data were available (pfs_days) but a binary logistic regression was used "
+            "rather than a time-to-event model; patients with differing follow-up durations were treated equivalently, "
+            "which may reduce statistical power relative to a survival model."
+        )
+    elif model_type == "cox_ph":
+        survival_note = "Model fit using Cox Proportional Hazards regression accounting for right-censored follow-up duration."
 
     footer = {
         "k": len(coeffs),
         "n_effective": hexec["model_results"]["sample_sizes"]["n_effective"],
         "e_effective": hexec["model_results"]["sample_sizes"]["e_effective"],
-        "survival_limitation": survival_note,
+        "model_type": model_type,
+        "survival_note": survival_note,
     }
 
-    html = "<table><tr><th>Variable</th><th>Adjusted OR</th><th>95% CI</th><th>p</th><th>Classification</th><th>E-value</th></tr>" + "".join(
+    html = f"<table><tr><th>Variable</th><th>{effect_label}</th><th>95% CI</th><th>p</th><th>Classification</th><th>E-value</th></tr>" + "".join(
         f"<tr><td>{r['variable']}</td><td>{r['adjusted_or']}</td><td>{r['adjusted_ci_95']}</td><td>{r['adjusted_p']}</td><td>{r['classification']}</td><td>{r['e_value']}</td></tr>"
         for r in rows
-    ) + f"</table><p>k={footer['k']}, N_eff={footer['n_effective']}, E_eff={footer['e_effective']}</p>" + (f"<p><em>Note: {survival_note}</em></p>" if survival_note else "")
+    ) + f"</table><p>Model: {model_type}, k={footer['k']}, N_eff={footer['n_effective']}, E_eff={footer['e_effective']}</p>" + (f"<p><em>Note: {survival_note}</em></p>" if survival_note else "")
 
     (EXPORT_DIR / "table_2.html").write_text(html)
     pd.DataFrame(rows).to_csv(EXPORT_DIR / "table_2.csv", index=False)
@@ -211,9 +219,13 @@ def methods_text():
     h1 = SESSION.h1_payload["provenance"]["plan_fingerprint_h1"]
     h0 = SESSION.hexec_payload["provenance"]["payload_fingerprint_h0"]
     coeffs = SESSION.hexec_payload["model_results"]["coefficients"]
+    model_type = SESSION.hexec_payload["model_results"].get("model_type", "logistic_regression")
 
     exposure_col = SESSION.h1_payload["protocol"]["exposure"]["column_name"]
     exp_coef = next((c for c in coeffs if c["variable"].startswith(exposure_col)), None)
+
+    effect_name = "Hazard Ratio" if model_type == "cox_ph" else "Odds Ratio"
+    effect_abbr = "HR" if model_type == "cox_ph" else "OR"
 
     exp_text = ""
     if exp_coef:
@@ -229,21 +241,15 @@ def methods_text():
             direction = "no significant"
 
         if cls in ("significant", "borderline/trend"):
-            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated {direction} odds (Adjusted OR {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
+            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated {direction} hazard/odds (Adjusted {effect_abbr} {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
         else:
-            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated no statistically significant association (Adjusted OR {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
+            exp_text = f" Analysis of primary exposure {exp_coef['variable']} demonstrated no statistically significant association (Adjusted {effect_abbr} {or_v:.3f}, 95% CI [{ci[0]:.3f}, {ci[1]:.3f}], p = {p_v:.4f})."
 
-    raw_cols = SESSION.raw_df.columns if SESSION.raw_df is not None else []
-    has_time = any("days" in c.lower() or "time" in c.lower() for c in raw_cols) or bool(SESSION.time_column)
-    survival_note = (
-        " Time-to-event data were available (pfs_days) but a binary logistic regression was used "
-        "rather than a time-to-event model; patients with differing follow-up durations were treated equivalently, "
-        "which may reduce statistical power relative to a survival model."
-    ) if has_time else ""
+    model_desc = "A Cox Proportional Hazards survival model" if model_type == "cox_ph" else "A logistic regression model"
 
     epv_gate = next((t for t in SESSION.hexec_payload["diagnostics_summary"]["tests"] if t["test_name"] == "events_per_variable_epv"), None)
     epv_note = ""
-    if epv_gate and epv_gate["status"] == "WARNING":
+    if epv_gate and epv_gate["status"] in ("WARNING", "FAIL"):
         val = epv_gate.get("metric_value", 0.0)
         if val < 5.0:
             epv_note = f" Critical Methodological Caveat: The fitted model has an EPV of {val:.2f} (< 5.0 threshold), introducing severe parameter instability, potential overfitting, and inflated confidence interval widths; all point estimates must be interpreted with extreme caution."
@@ -253,11 +259,11 @@ def methods_text():
     text = (
         "Analysis was performed in accordance with a pre-specified protocol locked prior to "
         f"unblinding (Protocol Hash: sha256_{h1[:16]}...). The vaulted analytic dataset was fixed "
-        f"prior to protocol lock (Dataset Hash: sha256_{h0[:16]}...). A logistic regression model "
+        f"prior to protocol lock (Dataset Hash: sha256_{h0[:16]}...). {model_desc} "
         f"was fit adjusting for {len(SESSION.h1_payload['protocol']['confounders'])} pre-specified "
         f"confounders.{exp_text} Diagnostic gates were evaluated per ruleset {SESSION.hexec_payload['diagnostic_config']['ruleset_version']}, "
         f"overall status {SESSION.hexec_payload['diagnostics_summary']['overall_status']}. "
-        f"E-values were computed for all effect estimates as a mandatory sensitivity analysis.{epv_note}{survival_note}"
+        f"E-values were computed for all effect estimates as a mandatory sensitivity analysis.{epv_note}"
     )
     (EXPORT_DIR / "manuscript_draft.txt").write_text(text)
     return {"text": text, "url": "/exports/manuscript_draft.txt"}

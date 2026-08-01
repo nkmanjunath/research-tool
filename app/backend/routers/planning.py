@@ -173,7 +173,7 @@ def epv_live():
     n_effective = len(effective_df)
     e_total = (effective_df[outcome_col].astype(str) == str(SESSION.outcome_spec["event_value"])).sum()
 
-    # Calculate degrees of freedom (k) accounting for categorical dummy variables (drop_first=True)
+    # Calculate degrees of freedom (k) for main effects
     predictors = [SESSION.exposure["column_name"]] + SESSION.confounders
     k = 0
     for col in predictors:
@@ -185,7 +185,21 @@ def epv_live():
                 k += max(n_uniq - 1, 1)
         else:
             k += 1
-    k += len(SESSION.interactions)
+
+    # Calculate degrees of freedom for interaction terms (DoF_A * DoF_B)
+    for inter in SESSION.interactions:
+        term_str = inter.get("term", "")
+        parts = [p.strip() for p in term_str.replace("*", ":").split(":") if p.strip()]
+        if len(parts) >= 2:
+            inter_dof = 1
+            for p in parts:
+                if p in effective_df.columns:
+                    if not pd.api.types.is_numeric_dtype(effective_df[p]):
+                        u = effective_df[p].dropna().nunique()
+                        inter_dof *= max(u - 1, 1)
+            k += inter_dof
+        else:
+            k += 1
 
     epv = round(e_total / k, 2) if k else None
 
