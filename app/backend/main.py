@@ -5,8 +5,11 @@ localhost only. Phase 1 = Tab 1, Tab 2, Tab 3, & Tab 4 wired live.
 from pathlib import Path
 import sys
 
-# Ensure backend root is on sys.path
+# Ensure repo root and backend root are on sys.path
 backend_dir = Path(__file__).resolve().parent
+repo_root = backend_dir.parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
