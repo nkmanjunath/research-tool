@@ -241,6 +241,15 @@ def methods_text():
         "which may reduce statistical power relative to a survival model."
     ) if has_time else ""
 
+    epv_gate = next((t for t in SESSION.hexec_payload["diagnostics_summary"]["tests"] if t["test_name"] == "events_per_variable_epv"), None)
+    epv_note = ""
+    if epv_gate and epv_gate["status"] == "WARNING":
+        val = epv_gate.get("metric_value", 0.0)
+        if val < 5.0:
+            epv_note = f" Critical Methodological Caveat: The fitted model has an EPV of {val:.2f} (< 5.0 threshold), introducing severe parameter instability, potential overfitting, and inflated confidence interval widths; all point estimates must be interpreted with extreme caution."
+        else:
+            epv_note = f" Methodological Caveat: The fitted model has an EPV of {val:.2f} (< 10.0 threshold), indicating potential parameter instability and reduced precision."
+
     text = (
         "Analysis was performed in accordance with a pre-specified protocol locked prior to "
         f"unblinding (Protocol Hash: sha256_{h1[:16]}...). The vaulted analytic dataset was fixed "
@@ -248,7 +257,7 @@ def methods_text():
         f"was fit adjusting for {len(SESSION.h1_payload['protocol']['confounders'])} pre-specified "
         f"confounders.{exp_text} Diagnostic gates were evaluated per ruleset {SESSION.hexec_payload['diagnostic_config']['ruleset_version']}, "
         f"overall status {SESSION.hexec_payload['diagnostics_summary']['overall_status']}. "
-        f"E-values were computed for all effect estimates as a mandatory sensitivity analysis.{survival_note}"
+        f"E-values were computed for all effect estimates as a mandatory sensitivity analysis.{epv_note}{survival_note}"
     )
     (EXPORT_DIR / "manuscript_draft.txt").write_text(text)
     return {"text": text, "url": "/exports/manuscript_draft.txt"}
