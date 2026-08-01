@@ -5,12 +5,8 @@ Maps to core.reporting per DECISIONS.md §7. Consumes Hexec (SESSION.hexec_paylo
 import hashlib
 import json
 import math
-import sys
+import _bootstrap  # noqa: F401
 from pathlib import Path
-
-repo_root = Path(__file__).resolve().parent.parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException

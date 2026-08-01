@@ -2,16 +2,7 @@
 Sandbox-to-Vault app — FastAPI backend.
 localhost only. Phase 1 = Tab 1, Tab 2, Tab 3, & Tab 4 wired live.
 """
-from pathlib import Path
-import sys
-
-# Ensure repo root and backend root are on sys.path
-backend_dir = Path(__file__).resolve().parent
-repo_root = backend_dir.parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
-if str(backend_dir) not in sys.path:
-    sys.path.insert(0, str(backend_dir))
+from _bootstrap import BACKEND_DIR  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -59,10 +50,10 @@ app.include_router(execution.router, prefix="/api/execute", tags=["Execution (Ta
 app.include_router(reporting.router, prefix="/api/report", tags=["Reporting (Tab 4)"])
 
 # Serve exports directory for HTML/SVG asset viewing
-exports_dir = backend_dir / "exports"
+exports_dir = BACKEND_DIR / "exports"
 exports_dir.mkdir(exist_ok=True)
 app.mount("/exports", StaticFiles(directory=str(exports_dir)), name="exports")
 
 # Serve the vanilla JS SPA
-frontend_dir = backend_dir.parent / "frontend"
+frontend_dir = BACKEND_DIR.parent / "frontend"
 app.mount("/", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
