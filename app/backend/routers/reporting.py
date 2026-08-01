@@ -7,6 +7,7 @@ import json
 import math
 import zipfile
 import _bootstrap  # noqa: F401
+from _bootstrap import REPO_ROOT
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +22,7 @@ from state import SESSION
 
 router = APIRouter()
 
-EXPORT_DIR = Path(__file__).parent.parent / "exports"
+EXPORT_DIR = REPO_ROOT / "exports"
 EXPORT_DIR.mkdir(exist_ok=True)
 
 

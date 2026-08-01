@@ -2,7 +2,7 @@
 Sandbox-to-Vault app — FastAPI backend.
 localhost only. Phase 1 = Tab 1, Tab 2, Tab 3, & Tab 4 wired live.
 """
-from _bootstrap import BACKEND_DIR  # noqa: F401
+from _bootstrap import BACKEND_DIR, REPO_ROOT  # noqa: F401
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -50,7 +50,7 @@ app.include_router(execution.router, prefix="/api/execute", tags=["Execution (Ta
 app.include_router(reporting.router, prefix="/api/report", tags=["Reporting (Tab 4)"])
 
 # Serve exports directory for HTML/SVG asset viewing
-exports_dir = BACKEND_DIR / "exports"
+exports_dir = REPO_ROOT / "exports"
 exports_dir.mkdir(exist_ok=True)
 app.mount("/exports", StaticFiles(directory=str(exports_dir)), name="exports")
 

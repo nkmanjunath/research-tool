@@ -1,5 +1,6 @@
 # Study data (real or synthetic)
 data/
+exports/
 app/backend/exports/
 *.db
 *.sqlite
