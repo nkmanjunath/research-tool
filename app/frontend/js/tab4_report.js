@@ -1,6 +1,13 @@
 $("genAssetsBtn").addEventListener("click", async () => {
-  const [t1, t2, fig, mtxt, checklist] = await Promise.all([
-    fetch(`${API}/report/tables/table1`).then((r) => r.json()),
+  const r1 = await fetch(`${API}/report/tables/table1`);
+  if (!r1.ok) {
+    const err = await r1.json();
+    alert(err.detail || "Error generating publication assets.");
+    return;
+  }
+  const t1 = await r1.json();
+
+  const [t2, fig, mtxt, checklist] = await Promise.all([
     fetch(`${API}/report/tables/table2`).then((r) => r.json()),
     fetch(`${API}/report/figures/forest-plot`).then((r) => r.json()),
     fetch(`${API}/report/manuscript/methods`).then((r) => r.json()),

@@ -28,7 +28,10 @@ EXPORT_DIR.mkdir(exist_ok=True)
 
 def _require_hexec():
     if SESSION.hexec_payload is None:
-        raise HTTPException(400, "No execution result yet — run Tab 3 first (PASS or WARNING route).")
+        raise HTTPException(400, "No execution result yet — please lock protocol in Tab 2 and run execution in Tab 3 first.")
+    diag = SESSION.hexec_payload.get("diagnostics_summary", {})
+    if diag.get("overall_status") == "FAIL":
+        raise HTTPException(400, "Primary model execution failed diagnostic gates (FAIL route). Please remediate via Tab 3 Autopsy Canvas before generating publication assets.")
 
 
 def _apply_sentinels(df: pd.DataFrame) -> pd.DataFrame:
