@@ -52,5 +52,5 @@ See `research-tool --help` and `app/README.md` for web interface instructions.
 
 - **Lead Maintainer**: [Manjunath N K](https://github.com/nkmanjunath)
 - **AI Pair Programming & Collaboration**:
-  - **Google Antigravity (AGY)** — Architecture, Socratic Wizard, 4-Gate Diagnostics & UI/UX design.
+  - **Google Antigravity (AGY)** — Pair Programming, 4-Gate Diagnostics & UI/UX design.
   - **OpenCode** — Statistical engine verification & benchmarking fixtures.
