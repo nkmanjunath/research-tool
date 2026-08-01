@@ -15,6 +15,8 @@ dependencies = [
     "tableone>=0.8",
     "matplotlib>=3.8",
     "openpyxl>=3.1",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.0",
 ]
 
 [dependency-groups]
