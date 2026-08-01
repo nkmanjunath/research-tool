@@ -16,9 +16,33 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routers import ingestion, planning, execution, reporting
 
-app = FastAPI(title="research-tool", version="0.1.0-app-phase1")
+tags_metadata = [
+    {
+        "name": "Ingestion (Tab 1)",
+        "description": "Blinded dataset upload, schema mapping, sentinel configuration, and Stage 1 (H0) protocol vaulting.",
+    },
+    {
+        "name": "Planning (Tab 2)",
+        "description": "Socratic Wizard for pre-registering exposure, confounders, missing-data strategy, live EPV calculations, and Stage 2 (H1) protocol lock.",
+    },
+    {
+        "name": "Execution (Tab 3)",
+        "description": "Unattended statistical execution (Logistic / Cox PH), 4 diagnostic gates (Separation, VIF, Proportional Hazards, Linearity), and Autopsy Canvas remediation routing.",
+    },
+    {
+        "name": "Reporting (Tab 4)",
+        "description": "Journal-ready manuscript assets (Table 1 Baseline Balance with SMD, Table 2 Primary Effect Estimates, Interactive SVG Forest Plots, STROBE Checklists, Cryptographic Audit Binder).",
+    },
+]
 
-# localhost SPA talking to localhost API — CORS wide open is fine, never exposed beyond loopback.
+app = FastAPI(
+    title="Clinical Research Tool — Sandbox-to-Vault Engine",
+    description="Publication-grade, audit-sealed epidemiological and clinical trial analytical framework.",
+    version="1.2.0-strobe-default",
+    openapi_tags=tags_metadata,
+)
+
+# CORS middleware for local SPA
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8000"],
@@ -26,10 +50,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(ingestion.router, prefix="/api/ingest", tags=["tab1-ingestion"])
-app.include_router(planning.router, prefix="/api/plan", tags=["tab2-planning"])
-app.include_router(execution.router, prefix="/api/execute", tags=["tab3-execution"])
-app.include_router(reporting.router, prefix="/api/report", tags=["tab4-reporting"])
+app.include_router(ingestion.router, prefix="/api/ingest", tags=["Ingestion (Tab 1)"])
+app.include_router(planning.router, prefix="/api/plan", tags=["Planning (Tab 2)"])
+app.include_router(execution.router, prefix="/api/execute", tags=["Execution (Tab 3)"])
+app.include_router(reporting.router, prefix="/api/report", tags=["Reporting (Tab 4)"])
 
 # Serve exports directory for HTML/SVG asset viewing
 exports_dir = backend_dir / "exports"
