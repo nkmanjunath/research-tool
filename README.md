@@ -1,8 +1,6 @@
 # Retrospective Clinical Research Tool
 
-Local-first CLI tool that takes raw retrospective clinical study data to a
-STROBE-compliant manuscript draft. Built around a provenance-first,
-outcome-masking workflow to prevent HARKing and p-hacking.
+Local-first CLI and Web application that takes raw retrospective clinical study data to a STROBE-compliant manuscript draft. Built around a provenance-first, outcome-masking workflow to prevent HARKing and p-hacking.
 
 ## Setup
 
@@ -10,18 +8,16 @@ outcome-masking workflow to prevent HARKing and p-hacking.
 pip install -e .
 ```
 
-For development and tests, install the project environment with its dev
-dependencies and run pytest through that interpreter:
+For development and tests, install the project environment with its dev dependencies and run pytest through that interpreter:
 
 ```bash
 uv sync --dev
 .venv/bin/python -m pytest
 ```
 
-This keeps pytest on the same Python environment as scipy, pandas, and
-tableone.
+This keeps pytest on the same Python environment as scipy, pandas, and tableone.
 
-## Usage
+## Usage (CLI)
 
 ```bash
 STUDY=$(research-tool new-study "Myeloma EMD Study")
@@ -48,4 +44,13 @@ research-tool export-excel $STUDY
 
 > **Note:** Variable IDs are auto-assigned per-study at ingest time and are **not predictable**. Always run `list-variables` after `classify-variables` to get the correct IDs for `--outcome-var-ids`.
 
-See `research-tool --help` for details.
+See `research-tool --help` and `app/README.md` for web interface instructions.
+
+---
+
+## Authors & Acknowledgments
+
+- **Lead Maintainer**: [Manjunath N K](https://github.com/nkmanjunath)
+- **AI Pair Programming & Collaboration**:
+  - **Google Antigravity (AGY)** — Architecture, Socratic Wizard, 4-Gate Diagnostics & UI/UX design.
+  - **OpenCode** — Statistical engine verification & benchmarking fixtures.
