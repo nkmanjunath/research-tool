@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>research-tool — Sandbox to Vault</title>
+<link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="mark">
+      <span class="mark-glyph">&#9673;</span>
+      <span class="mark-text">SANDBOX <em>&rarr;</em> VAULT</span>
+    </div>
+    <nav class="tabs" id="tabnav">
+      <button class="tab active" data-tab="1">01 · Data &amp; Schema</button>
+      <button class="tab" data-tab="2">02 · Wizard &amp; Lock</button>
+      <button class="tab" data-tab="3">03 · Execution</button>
+      <button class="tab" data-tab="4">04 · Assets</button>
+    </nav>
+  </header>
+
+  <main id="panels">
+
+    <!-- TAB 1 — live -->
+    <section class="panel active" data-panel="1">
+      <div class="grid">
+
+        <div class="card">
+          <h2>Upload</h2>
+          <p class="hint">Raw file, hashed on arrival. Stays vaulted by content, not path.</p>
+          <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" />
+          <div id="uploadResult" class="mono small"></div>
+        </div>
+
+        <div class="card" id="schemaCard" hidden>
+          <h2>Schema</h2>
+          <p class="hint">Confirm a type per column. Identifiers get checked for duplicates.</p>
+          <div id="schemaRows"></div>
+          <button id="saveSchema">Save schema</button>
+        </div>
+
+        <div class="card" id="outcomeCard" hidden>
+          <h2>Outcome declaration</h2>
+          <p class="hint">Direct selection only — never auto-detected. Once set, this column is vaulted.</p>
+          <select id="outcomeCol"></select>
+          <input id="eventVal" placeholder="event value (e.g. 1)" />
+          <input id="censoredVal" placeholder="censored value (e.g. 0)" />
+          <button id="saveOutcome">Declare &amp; vault</button>
+          <div id="vaultBadge" class="badge" hidden>&#128274; outcome vaulted</div>
+        </div>
+
+        <div class="card" id="sentinelCard" hidden>
+          <h2>Missing-value sentinels</h2>
+          <p class="hint">Global strings, plus per-column overrides. Comma-separated.</p>
+          <input id="globalNa" placeholder="NA, N/A, unknown, ?" />
+          <button id="saveSentinels">Apply sentinels</button>
+        </div>
+
+        <div class="card" id="inspectionCard" hidden>
+          <h2>Blinded inspection</h2>
+          <div class="banner" id="cohortBanner"></div>
+          <div class="inspect-grid">
+            <div>
+              <h3>Missingness %</h3>
+              <div id="missingnessOut" class="mono small"></div>
+            </div>
+            <div>
+              <h3>Redundancy (|r| &gt; 0.8)</h3>
+              <div id="redundancyOut" class="mono small"></div>
+            </div>
+            <div>
+              <h3>Sparse cross-tabs</h3>
+              <div id="sparseOut" class="mono small"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="lockCard" hidden>
+          <h2>Lock Stage 1</h2>
+          <p class="hint">Emits Stage1Payload. Hashed after the fact — H0 excludes itself.</p>
+          <button id="lockBtn" class="lock">Seal H0 &amp; continue to Wizard</button>
+          <div id="lockResult"></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- TAB 2 — live Socratic Wizard -->
+    <section class="panel" data-panel="2">
+      <div class="grid">
+
+        <div class="card" id="stepA">
+          <h2>Step A · Exposure</h2>
+          <p class="hint">Primary exposure/treatment, from unvaulted covariates only.</p>
+          <select id="exposureCol"></select>
+          <input id="referenceLevel" placeholder="reference level (e.g. Arm A)" />
+          <button id="saveExposure">Set exposure</button>
+        </div>
+
+        <div class="card" id="stepB" hidden>
+          <h2>Step B · Outcome confirmation</h2>
+          <p class="hint">Read-only re-display of the Stage 1 declaration — not a re-selection.</p>
+          <div id="outcomeConfirmOut" class="mono small"></div>
+          <input id="timeCol" placeholder="time-to-event column (survival design only, optional)" />
+          <button id="saveTimeCol">Confirm</button>
+        </div>
+
+        <div class="card" id="stepC" hidden>
+          <h2>Step C · Confounders &amp; interactions</h2>
+          <div id="confounderChecks"></div>
+          <button id="saveConfounders">Save confounders</button>
+          <div id="redundancyWarn" class="mono small"></div>
+
+          <hr />
+          <p class="hint">Interaction terms permitted here only — needs genuine rationale (~15+ chars).</p>
+          <input id="interactionTerm" placeholder="term, e.g. age:treatment_group" />
+          <textarea id="interactionRationale" rows="2" placeholder="clinical rationale…"></textarea>
+          <button id="addInteraction">Add interaction</button>
+          <div id="manuscriptMirror" class="mirror"></div>
+        </div>
+
+        <div class="card" id="stepD" hidden>
+          <h2>Step D · Missing-data strategy &amp; live EPV</h2>
+          <select id="globalStrategy">
+            <option value="complete_case">complete case</option>
+            <option value="impute">impute</option>
+            <option value="flag_as_missing_category">flag as missing category</option>
+          </select>
+          <button id="saveStrategy">Apply strategy</button>
+          <div class="banner" id="epvGauge"></div>
+        </div>
+
+        <div class="card" id="stepLock" hidden>
+          <h2>Lock Stage 2</h2>
+          <button id="lockPlanBtn" class="lock">Seal H1 &amp; continue to Execution</button>
+          <div id="lockPlanResult"></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- TAB 3 — live Execution & Autopsy Canvas -->
+    <section class="panel" data-panel="3">
+      <div class="grid">
+
+        <div class="card">
+          <h2>Execute</h2>
+          <p class="hint">Unattended run against the locked plan. No manual tuning knobs — fixed ruleset, fixed thresholds.</p>
+          <button id="runBtn" class="lock">Run diagnostics &amp; model</button>
+        </div>
+
+        <div class="card" id="gatesCard" hidden>
+          <h2>Diagnostic gates</h2>
+          <div id="gatesOut"></div>
+        </div>
+
+        <div class="card" id="passCard" hidden>
+          <h2>Publication route</h2>
+          <div id="routeOut" class="mono small"></div>
+          <div id="coeffOut"></div>
+          <div class="seal" id="hexecSeal"></div>
+        </div>
+
+        <div class="card fail" id="autopsyCard" hidden>
+          <h2>&#9888; Autopsy Canvas — execution halted</h2>
+          <p class="hint">No silent fix. Failed gate, evidence, and canned remediation options only — you choose.</p>
+          <div id="autopsyOut" class="mono small"></div>
+          <div id="remediationChoices"></div>
+          <textarea id="amendmentRationale" rows="2" placeholder="rationale for this amendment…"></textarea>
+          <button id="prepareAmendmentBtn">Prepare protocol amendment &rarr; Tab 2</button>
+          <div id="amendmentOut" class="small"></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- TAB 4 — live Publication Assets & Audit Binder -->
+    <section class="panel" data-panel="4">
+      <div class="grid">
+
+        <div class="card">
+          <h2>Generate assets</h2>
+          <p class="hint">Pulls from Hexec. Run Tab 3 first (PASS or WARNING route).</p>
+          <button id="genAssetsBtn" class="lock">Generate Table 1, Table 2 &amp; forest plot</button>
+        </div>
+
+        <div class="card" id="table1Card" hidden>
+          <h2>Table 1 · Baseline characteristics</h2>
+          <div id="table1Out" class="mono small"></div>
+        </div>
+
+        <div class="card" id="table2Card" hidden>
+          <h2>Table 2 · Primary model</h2>
+          <div id="table2Out" class="mono small"></div>
+        </div>
+
+        <div class="card" id="forestCard" hidden>
+          <h2>Figure 1 · Forest plot</h2>
+          <div id="forestOut"></div>
+        </div>
+
+        <div class="card" id="manuscriptCard" hidden>
+          <h2>Manuscript &amp; checklist</h2>
+          <div id="manuscriptOut" class="small"></div>
+          <div id="checklistOut" class="mono small"></div>
+        </div>
+
+        <div class="card" id="binderCard" hidden>
+          <h2>Cryptographic audit binder</h2>
+          <p class="hint">Zips manifest + protocol + execution results + assets for independent verification.</p>
+          <button id="buildBinderBtn" class="lock">Build audit binder .zip</button>
+          <div id="binderOut"></div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <script src="js/app.js"></script>
+  <script src="js/tab1.js"></script>
+  <script src="js/tab2_wizard.js"></script>
+  <script src="js/tab3_execution.js"></script>
+  <script src="js/tab4_report.js"></script>
+</body>
+</html>
