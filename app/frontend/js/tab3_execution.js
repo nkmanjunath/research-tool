@@ -25,30 +25,47 @@ function renderGates(tests) {
 }
 
 function renderPublicationRoute(data) {
+  const modelLabel = data.model_results.model_type === "cox_ph" ? "Cox Proportional Hazards" : "Logistic Regression";
+  const metricLabel = data.model_results.model_type === "cox_ph" ? "aHR" : "aOR";
+
   $("routeOut").textContent =
     data.route === "PUBLICATION_PACKAGE"
-      ? "PASS — standard publication package"
-      : "WARNING — publication package + auto-injected Sensitivity & Limitations section";
+      ? `PASS — standard publication package (${modelLabel})`
+      : `WARNING — publication package (${modelLabel}) + auto-injected Sensitivity & Limitations section`;
 
   $("coeffOut").innerHTML = data.model_results.coefficients
-    .map((c) => `${c.variable}: OR ${c.adjusted_or} [${c.adjusted_ci_95[0]}, ${c.adjusted_ci_95[1]}] p=${c.adjusted_p}`)
+    .map((c) => `<strong>${c.variable}</strong>: ${metricLabel} ${c.adjusted_or} [95% CI ${c.adjusted_ci_95[0]}–${c.adjusted_ci_95[1]}], p=${c.adjusted_p}`)
     .join("<br/>");
 
-  $("hexecSeal").innerHTML = `&#128274; Hexec ${data.provenance.execution_fingerprint.slice(0, 20)}…`;
+  $("hexecSeal").innerHTML = `🔒 Hexec ${data.provenance.execution_fingerprint.slice(0, 20)}…`;
 }
 
 function renderAutopsy(data) {
-  $("autopsyOut").textContent =
-    `Failed gate: ${data.failed_gate}  ·  implicated: ${data.implicated_variables.join(", ") || "n/a"}`;
+  $("autopsyOut").innerHTML = `
+    <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); padding: 12px; border-radius: 6px; margin-bottom: 12px;">
+      <strong style="color: #ef4444;">⚠️ Diagnostic Gate Failure: ${data.failed_gate}</strong>
+      <p style="margin: 4px 0 0 0; font-size: 13px; color: #9ca3af;">Implicated Variables: ${data.implicated_variables.join(", ") || "Model Parameters / EPV Floor"}</p>
+    </div>
+  `;
 
   $("remediationChoices").innerHTML = data.remediation_options
-    .map((opt, i) => `<label style="display:block"><input type="checkbox" name="remediation" value="${opt}" ${i === 0 ? "checked" : ""}/> ${opt}</label>`)
+    .map((opt, i) => `
+      <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; background: #111827; padding: 8px 12px; border-radius: 4px; border: 1px solid #1e293b;">
+        <input type="radio" name="remediation" value="${opt}" ${i === 0 ? "checked" : ""}/>
+        <span>${opt}</span>
+      </label>
+    `)
     .join("");
 }
 
 $("prepareAmendmentBtn").addEventListener("click", async () => {
   const chosen = document.querySelector('input[name="remediation"]:checked')?.value || "";
   const rationale = $("amendmentRationale").value;
+  if (!rationale || rationale.trim().length < 15) {
+    alert("Please provide a valid protocol amendment rationale (at least 15 characters).");
+    return;
+  }
+
   const res = await fetch(`${API}/execute/amendment/prepare`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -56,5 +73,5 @@ $("prepareAmendmentBtn").addEventListener("click", async () => {
   });
   const data = await res.json();
   if (!res.ok) { alert(data.detail); return; }
-  $("amendmentOut").textContent = "Amendment prepared — go to Tab 2, edit Steps C/D only, then re-lock.";
+  $("amendmentOut").innerHTML = `<span style="color:#10b981;">✓ Amendment prepared (H<sub>n</sub>) — Navigate to Tab 2 to edit Steps C/D and re-lock.</span>`;
 });
