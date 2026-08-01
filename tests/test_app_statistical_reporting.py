@@ -9,6 +9,7 @@ Unit tests for the statistical reporting & analytical pipeline fixes:
 7. VanderWeele & Ding (2017) dual E-value calculation (E_est and E_CI)
 8. Dynamic language engine (strict 'odds' for Logistic, 'hazard' for Cox PH)
 9. Forest plot SVG log-scaled X-axis, ticks, and axis titles
+10. Tab 2 amendment workflow: FAIL -> prepare_amendment -> amendment_state -> lock_stage2 (was_amended: True) -> re-run execution
 """
 import math
 import sys
@@ -20,7 +21,16 @@ backend_dir = Path(__file__).parent.parent / "app" / "backend"
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from routers.execution import _e_value_dual, _fit_model, _run_gates
+from routers.execution import (
+    _e_value_dual,
+    _fit_model,
+    _run_gates,
+    AmendmentPrepareIn,
+    get_amendment_state,
+    prepare_amendment,
+    run_execution,
+)
+from routers.planning import lock_stage2
 from routers.reporting import _classify_coefficient, forest_plot, methods_text
 from state import SESSION
 
@@ -233,3 +243,57 @@ def test_forest_plot_svg_axis_geometry():
     svg_out = forest_plot()["svg"]
     assert "Adjusted Odds Ratio (95% CI)" in svg_out or "Adjusted Hazard Ratio (95% CI)" in svg_out
     assert ">1<" in svg_out or ">1.0<" in svg_out
+
+
+def test_tab2_amendment_end_to_end_flow():
+    """Test 10: Tab 2 amendment workflow (FAIL -> prepare_amendment -> amendment_state -> lock_stage2 -> re-run)."""
+    df = pd.read_csv("synthetic_21_v2.csv")
+    SESSION.raw_df = df
+    SESSION.sentinels = {"global_na_strings": ["NA"], "column_overrides": {}}
+    SESSION.outcome_spec = {"column_name": "pfs_event", "event_value": 1, "censored_value": 0}
+    SESSION.time_column = "pfs_days"
+    SESSION.exposure = {"column_name": "treatment_arm", "reference_level": "A"}
+    SESSION.confounders = ["age", "iss_stage", "high_risk_fish", "prior_lines"]
+    SESSION.interactions = []
+    SESSION.missing_data_strategy = {"global_default": "complete_case", "column_overrides": {}}
+    SESSION.h0_payload = {"provenance": {"payload_fingerprint_h0": "h0_hash_123"}}
+    SESSION.plan_chain = []
+    SESSION.pending_amendment = None
+
+    # Lock initial H1 plan
+    h1 = lock_stage2()
+    assert "parent_plan_hash" not in h1["provenance"]
+
+    # Run execution -> should FAIL on EPV < 5.0 (5 events / 6 parameters = 0.83 < 5.0)
+    exec_res = run_execution()
+    assert exec_res["route"] == "AUTOPSY_CANVAS"
+    assert exec_res["diagnostics_summary"]["overall_status"] == "FAIL"
+    assert exec_res["failed_gate"] == "events_per_variable_epv"
+
+    # Prepare amendment in Tab 3 Autopsy Canvas
+    prep = prepare_amendment(AmendmentPrepareIn(
+        chosen_remediation="Prune non-essential confounders to restore EPV >= 10",
+        rationale="Removing prior_lines and high_risk_fish to achieve sufficient EPV for primary model."
+    ))
+    assert prep["amendment_mode"] is True
+    assert "parent_plan_hash" in prep
+
+    # Query amendment state (used by Tab 2 UI on entry)
+    state = get_amendment_state()
+    assert state["amendment_mode"] is True
+    assert state["parent_plan_hash"] == h1["provenance"]["plan_fingerprint_h1"]
+    assert state["locked_readonly"]["exposure"]["column_name"] == "treatment_arm"
+
+    # Amend confounders in Tab 2 (prune to 0 confounders: treatment_arm only -> k=1, EPV = 5.0 >= 5.0)
+    SESSION.confounders = []
+
+    # Re-lock plan (POST /api/plan/lock)
+    h2 = lock_stage2()
+    assert h2["provenance"]["parent_plan_hash"] == h1["provenance"]["plan_fingerprint_h1"]
+    assert h2["provenance"]["amendment_rationale"] != ""
+    assert SESSION.pending_amendment is None
+
+    # Re-run execution (POST /api/execute/run) -> now passes/warns (EPV = 5.0 >= 5.0)
+    exec_res2 = run_execution()
+    assert exec_res2["route"] in ("PUBLICATION_PACKAGE", "PUBLICATION_PACKAGE_WITH_LIMITATIONS")
+    assert exec_res2["provenance"]["was_amended"] is True

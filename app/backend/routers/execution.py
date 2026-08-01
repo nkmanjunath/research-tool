@@ -427,10 +427,14 @@ def prepare_amendment(body: AmendmentPrepareIn):
     SESSION.pending_amendment["rationale"] = body.rationale
     return {
         "amendment_mode": True,
+        "parent_plan_hash": SESSION.pending_amendment.get("parent_plan_hash", ""),
+        "failed_gate": SESSION.pending_amendment.get("failed_gate", ""),
         "locked_readonly": {
             "exposure": SESSION.exposure,
             "outcome_confirmation": {
                 "column_name": SESSION.outcome_spec["column_name"],
+                "event_value": SESSION.outcome_spec.get("event_value", 1),
+                "censored_value": SESSION.outcome_spec.get("censored_value", 0),
                 "time_column": SESSION.time_column,
             },
         },
@@ -443,4 +447,32 @@ def prepare_amendment(body: AmendmentPrepareIn):
         "prefilled_rationale": body.rationale,
         "note": "Outcome stays masked here — only diagnostic evidence shown, never direction/significance (§6.3). "
                 "Edit Steps C/D in Tab 2, then /api/plan/lock re-locks chained to this failed plan's hash.",
+    }
+
+
+@router.get("/amendment/state")
+def get_amendment_state():
+    if not SESSION.pending_amendment:
+        return {"amendment_mode": False}
+    return {
+        "amendment_mode": True,
+        "parent_plan_hash": SESSION.pending_amendment.get("parent_plan_hash", ""),
+        "failed_gate": SESSION.pending_amendment.get("failed_gate", ""),
+        "locked_readonly": {
+            "exposure": SESSION.exposure,
+            "outcome_confirmation": {
+                "column_name": SESSION.outcome_spec["column_name"] if SESSION.outcome_spec else "",
+                "event_value": SESSION.outcome_spec.get("event_value", 1) if SESSION.outcome_spec else 1,
+                "censored_value": SESSION.outcome_spec.get("censored_value", 0) if SESSION.outcome_spec else 0,
+                "time_column": SESSION.time_column,
+            },
+        },
+        "editable": {
+            "confounders": SESSION.confounders,
+            "interactions": SESSION.interactions,
+            "missing_data_strategy": SESSION.missing_data_strategy,
+        },
+        "flagged_variables": SESSION.pending_amendment.get("evidence", {}).get("affected_variables", []),
+        "prefilled_rationale": SESSION.pending_amendment.get("rationale", ""),
+        "chosen_remediation": SESSION.pending_amendment.get("chosen_remediation", ""),
     }

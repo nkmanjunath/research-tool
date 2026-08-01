@@ -73,5 +73,10 @@ $("prepareAmendmentBtn").addEventListener("click", async () => {
   });
   const data = await res.json();
   if (!res.ok) { alert(data.detail); return; }
-  $("amendmentOut").innerHTML = `<span style="color:#10b981;">✓ Amendment prepared (H<sub>n</sub>) — Navigate to Tab 2 to edit Steps C/D and re-lock.</span>`;
+  $("amendmentOut").innerHTML = `<span style="color:#10b981;">✓ Amendment prepared (H<sub>n</sub>) — Navigating to Tab 2 to edit Steps C/D...</span>`;
+
+  setTimeout(() => {
+    const tab2Btn = document.querySelector('.tab[data-tab="2"]');
+    if (tab2Btn) tab2Btn.click();
+  }, 350);
 });
