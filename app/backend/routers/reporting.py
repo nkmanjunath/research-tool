@@ -54,15 +54,23 @@ def get_display_label(var: str) -> str:
         parts = [get_display_label(p.strip()) for p in var.replace("*", ":").split(":") if p.strip()]
         return " × ".join(parts)
 
+    # Check if var is a raw column in raw_df (prevents continuous cols with '_' like hemoglobin_g_dl from mis-splitting)
+    is_raw_col = (SESSION.raw_df is not None) and (var in SESSION.raw_df.columns)
+
     # Check known categorical dummy-encoded variables
     known_bases = ["treatment_arm", "high_risk_fish", "iss_stage", "prior_lines", "sex"]
     for base in known_bases:
-        if var.startswith(base + "_"):
+        if var.startswith(base + "_") and not is_raw_col:
             level = var[len(base) + 1:]
             base_label = COVARIATE_LABEL_MAP.get(base, _core_format_label(base))
 
             if base == "treatment_arm":
-                return f"{base_label}: {level} (vs Arm A)"
+                ref_level = "Arm A"
+                if SESSION.exposure and SESSION.exposure.get("reference_level"):
+                    ref_level = SESSION.exposure.get("reference_level")
+                elif SESSION.h1_payload and "protocol" in SESSION.h1_payload and "exposure" in SESSION.h1_payload["protocol"]:
+                    ref_level = SESSION.h1_payload["protocol"]["exposure"].get("reference_level", "Arm A")
+                return f"{base_label}: {level} (vs {ref_level})"
             elif base == "high_risk_fish":
                 ref = "No" if level.lower() == "yes" else "Yes"
                 return f"{base_label} ({level.capitalize()} vs {ref})"
@@ -76,8 +84,8 @@ def get_display_label(var: str) -> str:
             else:
                 return f"{base_label}: {level}"
 
-    # General dummy variable fallback: name_LEVEL
-    if "_" in var and var not in COVARIATE_LABEL_MAP:
+    # General dummy variable fallback: name_LEVEL (only if NOT a raw dataset column)
+    if "_" in var and var not in COVARIATE_LABEL_MAP and not is_raw_col:
         parts = var.rsplit("_", 1)
         base, level = parts[0], parts[1]
         base_label = COVARIATE_LABEL_MAP.get(base, _core_format_label(base))

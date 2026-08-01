@@ -11,6 +11,7 @@ Unit tests for the statistical reporting & analytical pipeline fixes:
 9. Forest plot SVG log-scaled X-axis, ticks, and axis titles
 10. Tab 2 amendment workflow: FAIL -> prepare_amendment -> amendment_state -> lock_stage2 (was_amended: True) -> re-run execution
 11. Clinical display label formatting reusing core COVARIATE_LABEL_MAP / COVARIATE_UNIT_MAP
+12. Label parser continuous underscore handling & dynamic exposure reference level contrast formatting
 """
 import math
 import sys
@@ -302,6 +303,7 @@ def test_tab2_amendment_end_to_end_flow():
 
 def test_clinical_display_label_formatting():
     """Test 11: get_display_label() formats dummy and continuous variables into publication-grade labels."""
+    SESSION.exposure = {"column_name": "treatment_arm", "reference_level": "Arm A"}
     assert "ISS Stage II (vs Stage I)" in get_display_label("iss_stage_II")
     assert "High-Risk Cytogenetics (Yes vs No)" in get_display_label("high_risk_fish_yes")
     assert "Treatment Group: B (vs Arm A)" in get_display_label("treatment_arm_B")
@@ -309,3 +311,17 @@ def test_clinical_display_label_formatting():
     age_label = get_display_label("age")
     assert "Age, years" in age_label
     assert "Per year increase" in age_label
+
+
+def test_label_parser_continuous_underscore_and_dynamic_reference_level():
+    """Test 12: get_display_label() handles continuous cols with '_' without mis-splitting and uses dynamic exposure reference level."""
+    # Test 12a: Continuous variable with underscore in raw_df should not split into base: level
+    SESSION.raw_df = pd.DataFrame({"hemoglobin_g_dl": [12.5, 14.1, 13.0]})
+    label_cont = get_display_label("hemoglobin_g_dl")
+    assert label_cont == "Hemoglobin G Dl"
+    assert "Hemoglobin G: dl" not in label_cont
+
+    # Test 12b: Dynamic exposure reference level (e.g. 'Control' instead of hardcoded 'Arm A')
+    SESSION.exposure = {"column_name": "treatment_arm", "reference_level": "Control"}
+    label_exp = get_display_label("treatment_arm_B")
+    assert label_exp == "Treatment Group: B (vs Control)"
