@@ -1,13 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
 :root {
-  --bg: #14161b;
-  --surface: #1c1f27;
-  --surface-2: #232732;
-  --line: #2d323d;
-  --text: #e7e4dc;
-  --muted: #8b909c;
-  --gold: #c9a227;
-  --teal: #3f6b6f;
-  --fail: #b5483f;
+  --bg: #0B0F19;
+  --surface: #111827;
+  --surface-2: #1E293B;
+  --line: #334155;
+  --line-light: rgba(255, 255, 255, 0.08);
+  --text: #F8FAFC;
+  --muted: #94A3B8;
+  --gold: #F59E0B;
+  --teal: #0EA5E9;
+  --emerald: #10B981;
+  --fail: #EF4444;
+  --radius: 8px;
 }
 
 * { box-sizing: border-box; }
@@ -16,146 +21,188 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-.mono { font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+.mono { font-family: 'Fira Code', monospace; }
 .small { font-size: 12px; color: var(--muted); }
 
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 24px;
+  padding: 14px 28px;
   border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  background: rgba(17, 24, 39, 0.85);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 100;
 }
 
-.mark { display: flex; align-items: center; gap: 8px; letter-spacing: 0.06em; }
-.mark-glyph { color: var(--gold); font-size: 18px; }
-.mark-text { font-weight: 600; font-size: 13px; }
+.mark { display: flex; align-items: center; gap: 10px; letter-spacing: 0.08em; }
+.mark-glyph { color: var(--gold); font-size: 20px; text-shadow: 0 0 12px rgba(245, 158, 11, 0.4); }
+.mark-text { font-weight: 700; font-size: 13px; text-transform: uppercase; color: var(--text); }
 .mark-text em { color: var(--gold); font-style: normal; }
 
-.tabs { display: flex; gap: 4px; }
+.tabs { display: flex; gap: 6px; }
 .tab {
   background: transparent;
   border: 1px solid transparent;
   color: var(--muted);
-  padding: 8px 14px;
-  border-radius: 6px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
 }
-.tab:hover { color: var(--text); }
+.tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .tab.active {
   color: var(--text);
-  border-color: var(--line);
+  border-color: var(--teal);
   background: var(--surface-2);
+  box-shadow: 0 0 12px rgba(14, 165, 233, 0.2);
 }
 
-main { padding: 28px 24px 80px; max-width: 920px; margin: 0 auto; }
+main { padding: 32px 24px 80px; max-width: 960px; margin: 0 auto; }
 .panel { display: none; }
-.panel.active { display: block; }
+.panel.active { display: block; animation: fadeIn 0.25s ease-in-out; }
 
-.stub {
-  border: 1px dashed var(--line);
-  border-radius: 8px;
-  padding: 40px;
-  text-align: center;
-  color: var(--muted);
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-.grid { display: flex; flex-direction: column; gap: 18px; }
+.grid { display: flex; flex-direction: column; gap: 20px; }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 18px 20px;
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  transition: border-color 0.2s ease;
 }
-.card h2 { margin: 0 0 4px; font-size: 15px; }
-.card h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.hint { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
+.card:hover { border-color: rgba(255, 255, 255, 0.2); }
+.card h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: #F8FAFC; }
+.card h3 { margin: 0 0 8px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
 
 textarea {
   font-family: inherit;
   width: 100%;
-  margin: 6px 0;
-  border-radius: 6px;
+  margin: 8px 0;
+  border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text);
-  padding: 8px 10px;
+  padding: 10px 12px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+textarea:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.3);
 }
 
-hr { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 
 .mirror {
-  margin-top: 8px;
-  padding: 10px 12px;
-  border-left: 2px solid var(--gold);
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--gold);
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
   font-style: italic;
+  border-radius: 0 var(--radius) var(--radius) 0;
 }
 
-.gate-row { padding: 6px 0; border-bottom: 1px solid var(--line); font-family: "SFMono-Regular", Menlo, Consolas, monospace; }
+.gate-row { padding: 8px 0; border-bottom: 1px solid var(--line); font-family: 'Fira Code', monospace; }
 .gate-row:last-child { border-bottom: none; }
-.gate-pass strong { color: #10B981; }
+.gate-pass strong { color: var(--emerald); }
 .gate-warn strong { color: var(--gold); }
 .gate-fail strong { color: var(--fail); }
 .gate-na strong { color: var(--muted); }
 
-.card.fail { border-color: var(--fail); }
+.card.fail {
+  border-color: var(--fail);
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
+}
 
 input, select, button {
   font-size: 13px;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border-radius: var(--radius);
   border: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--text);
+  transition: all 0.2s ease;
 }
-input, select { margin: 4px 6px 4px 0; }
+input, select { margin: 4px 8px 4px 0; }
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.25);
+}
 
 button {
   cursor: pointer;
   background: var(--teal);
   border-color: var(--teal);
-  color: #eaf3f2;
+  color: #FFFFFF;
+  font-weight: 500;
 }
-button:hover { filter: brightness(1.1); }
-button.lock { background: var(--gold); border-color: var(--gold); color: #1a1400; font-weight: 600; }
+button:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 10px rgba(14, 165, 233, 0.4);
+}
+button.lock {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #0F172A;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+button.lock:hover {
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
+}
 
 .badge {
   display: inline-block;
-  margin-top: 8px;
-  padding: 4px 10px;
+  margin-top: 10px;
+  padding: 4px 12px;
   border-radius: 20px;
   border: 1px solid var(--gold);
   color: var(--gold);
+  background: rgba(245, 158, 11, 0.1);
   font-size: 12px;
+  font-weight: 600;
 }
 
 .banner {
   display: flex;
   gap: 24px;
-  padding: 12px 0 16px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 14px;
-  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  margin-bottom: 16px;
+  font-family: 'Fira Code', monospace;
 }
 
 .inspect-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  gap: 18px;
 }
 
-.schema-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.schema-row span { width: 160px; }
+.schema-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.schema-row span { width: 180px; font-weight: 500; }
 
 #lockResult { margin-top: 12px; }
 .seal {
@@ -164,6 +211,10 @@ button.lock { background: var(--gold); border-color: var(--gold); color: #1a1400
   gap: 8px;
   border: 1px solid var(--gold);
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 6px 16px;
   color: var(--gold);
+  background: rgba(245, 158, 11, 0.08);
+  font-family: 'Fira Code', monospace;
+  font-size: 12px;
+  font-weight: 600;
 }
