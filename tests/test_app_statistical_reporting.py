@@ -12,9 +12,11 @@ Unit tests for the statistical reporting & analytical pipeline fixes:
 10. Tab 2 amendment workflow: FAIL -> prepare_amendment -> amendment_state -> lock_stage2 (was_amended: True) -> re-run execution
 11. Clinical display label formatting reusing core COVARIATE_LABEL_MAP / COVARIATE_UNIT_MAP
 12. Label parser continuous underscore handling & dynamic exposure reference level contrast formatting
+13. Audit-binder end-to-end zip archive generation & structure verification
 """
 import math
 import sys
+import zipfile
 from pathlib import Path
 import pandas as pd
 import pytest
@@ -33,7 +35,7 @@ from routers.execution import (
     run_execution,
 )
 from routers.planning import lock_stage2
-from routers.reporting import _classify_coefficient, forest_plot, get_display_label, methods_text
+from routers.reporting import _classify_coefficient, build_audit_binder, download_binder, forest_plot, get_display_label, methods_text
 from state import SESSION
 
 
@@ -325,3 +327,57 @@ def test_label_parser_continuous_underscore_and_dynamic_reference_level():
     SESSION.exposure = {"column_name": "treatment_arm", "reference_level": "Control"}
     label_exp = get_display_label("treatment_arm_B")
     assert label_exp == "Treatment Group: B (vs Control)"
+
+
+def test_audit_binder_end_to_end_zip_generation():
+    """Test 13: End-to-end execution of build_audit_binder() produces a valid, non-empty ZIP file with all required audit assets."""
+    df = pd.read_csv("synthetic_100.csv")
+    SESSION.raw_df = df
+    SESSION.sentinels = {"global_na_strings": ["NA"], "column_overrides": {}}
+    SESSION.outcome_spec = {"column_name": "pfs_event", "event_value": 1, "censored_value": 0}
+    SESSION.time_column = "pfs_days"
+    SESSION.exposure = {"column_name": "treatment_arm", "reference_level": "A"}
+    SESSION.confounders = ["age", "iss_stage"]
+    SESSION.interactions = []
+    SESSION.missing_data_strategy = {"global_default": "complete_case", "column_overrides": {}}
+    SESSION.h0_payload = {"provenance": {"payload_fingerprint_h0": "h0_hash_123"}}
+    SESSION.plan_chain = []
+    SESSION.column_mappings = {"treatment_arm": "categorical", "age": "continuous"}
+
+    # Lock H1 plan
+    h1 = lock_stage2()
+
+    # Run execution -> populates hexec_payload
+    exec_res = run_execution()
+    assert exec_res["route"] in ("PUBLICATION_PACKAGE", "PUBLICATION_PACKAGE_WITH_LIMITATIONS")
+
+    # Call build_audit_binder()
+    binder_res = build_audit_binder()
+
+    assert "bundle_fingerprint_hbundle" in binder_res
+    assert binder_res["bundle_fingerprint_hbundle"] != ""
+    assert "download_url" in binder_res
+
+    zip_file_path = Path(binder_res["zip_path"])
+    assert zip_file_path.exists()
+    assert zip_file_path.stat().st_size > 0
+
+    # Read zip file contents
+    with zipfile.ZipFile(zip_file_path, "r") as z:
+        namelist = z.namelist()
+        assert "manifest.json" in namelist
+        assert "verification_script.py" in namelist
+        assert "01_raw_vaulted_data/dataset_fingerprint.sha256" in namelist
+        assert "01_raw_vaulted_data/schema_mapping.json" in namelist
+        assert "02_pre_registered_protocols/protocol_h1_locked.json" in namelist
+        assert "02_pre_registered_protocols/amendment_chain.json" in namelist
+        assert "03_execution_and_diagnostics/execution_results_hexec.json" in namelist
+        assert "04_manuscript_assets/table_1_baseline.html" in namelist
+        assert "04_manuscript_assets/table_2_primary_model.html" in namelist
+        assert "04_manuscript_assets/figure_1_forest_plot.svg" in namelist
+        assert "04_manuscript_assets/strobe_checklist_completed.txt" in namelist
+        assert "04_manuscript_assets/strobe_checklist.html" in namelist
+
+    # Test download endpoint
+    dl_res = download_binder(zip_file_path.name)
+    assert str(dl_res.path) == str(zip_file_path)

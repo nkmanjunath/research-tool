@@ -5,6 +5,7 @@ Maps to core.reporting per DECISIONS.md §7. Consumes Hexec (SESSION.hexec_paylo
 import hashlib
 import json
 import math
+import zipfile
 import _bootstrap  # noqa: F401
 from pathlib import Path
 
