@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "research-tool"
+name = "research-tool-cli"
 version = "0.1.0"
 description = "Retrospective clinical research tool with outcome-masking and provenance"
 requires-python = ">=3.11"
@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 research-tool = "core.cli.main:main"
+research-tool-cli = "core.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

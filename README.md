@@ -2,8 +2,14 @@
 
 Local-first CLI and Web application that takes raw retrospective clinical study data to a STROBE-compliant manuscript draft. Built around a provenance-first, outcome-masking workflow to prevent HARKing and p-hacking.
 
-## Setup
+## Setup & Installation
 
+Install from PyPI:
+```bash
+pip install research-tool-cli
+```
+
+Or install locally in editable mode:
 ```bash
 pip install -e .
 ```
