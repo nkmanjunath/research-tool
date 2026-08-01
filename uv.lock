@@ -1084,7 +1084,7 @@ wheels = [
 ]
 
 [[package]]
-name = "research-tool"
+name = "research-tool-cli"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
