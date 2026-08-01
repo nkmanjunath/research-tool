@@ -77,16 +77,16 @@ def get_display_label(var: str) -> str:
                 return f"{base_label}: {level}"
 
     # General dummy variable fallback: name_LEVEL
-    if "_" in var:
+    if "_" in var and var not in COVARIATE_LABEL_MAP:
         parts = var.rsplit("_", 1)
         base, level = parts[0], parts[1]
         base_label = COVARIATE_LABEL_MAP.get(base, _core_format_label(base))
         return f"{base_label}: {level}"
 
-    # Continuous variable
+    # Base variable (continuous or raw categorical name for Table 1)
     base_label = COVARIATE_LABEL_MAP.get(var, _core_format_label(var))
-    unit_str = COVARIATE_UNIT_MAP.get(var, "per 1-unit increase")
-    return f"{base_label} ({unit_str})"
+    unit_str = COVARIATE_UNIT_MAP.get(var)
+    return f"{base_label} ({unit_str})" if unit_str else base_label
 
 
 def _classify_coefficient(c: dict) -> str:
