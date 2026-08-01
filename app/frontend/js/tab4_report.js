@@ -17,8 +17,9 @@ $("genAssetsBtn").addEventListener("click", async () => {
     const imbTag = r.imbalanced
       ? `<span style="color:#ef4444; font-weight:600;">IMBALANCED (|SMD|>0.1)</span>`
       : `<span style="color:#10b981;">BALANCED</span>`;
+    const label = r.display_label || r.variable;
     return `<tr>
-      <td><strong>${r.variable}</strong></td>
+      <td><strong>${label}</strong></td>
       <td>${val1}</td>
       <td>${val2}</td>
       <td>${r.smd.toFixed(3)}</td>
@@ -30,7 +31,7 @@ $("genAssetsBtn").addEventListener("click", async () => {
   $("table1Out").innerHTML = `
     <table class="journal-table">
       <thead>
-        <tr><th>Variable</th><th>${g1}</th><th>${g2}</th><th>SMD</th><th>Balance Status</th><th>Missing %</th></tr>
+        <tr><th>Characteristic</th><th>${g1}</th><th>${g2}</th><th>SMD</th><th>Balance Status</th><th>Missing %</th></tr>
       </thead>
       <tbody>${t1RowsHtml}</tbody>
     </table>
@@ -39,16 +40,17 @@ $("genAssetsBtn").addEventListener("click", async () => {
 
   // Render publication-grade Table 2 HTML
   const effectLabel = t2.footer.model_type === "cox_ph" ? "Adjusted HR" : "Adjusted OR";
-  const t2RowsHtml = t2.rows.map((r) => `
-    <tr>
-      <td><strong>${r.variable}</strong></td>
+  const t2RowsHtml = t2.rows.map((r) => {
+    const label = r.display_label || r.variable;
+    return `<tr>
+      <td><strong>${label}</strong></td>
       <td>${r.adjusted_or}</td>
       <td>[${r.adjusted_ci_95[0]}–${r.adjusted_ci_95[1]}]</td>
       <td>${r.adjusted_p}</td>
       <td><span class="badge ${r.classification === 'significant' ? 'badge-pass' : r.classification === 'borderline/trend' ? 'badge-warn' : ''}">${r.classification}</span></td>
       <td>${r.e_value_formatted}</td>
-    </tr>
-  `).join("");
+    </tr>`;
+  }).join("");
 
   $("table2Out").innerHTML = `
     <table class="journal-table">
