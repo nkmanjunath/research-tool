@@ -166,13 +166,13 @@ STROBE Compliance Report — Study: e996f439670948d286d362b0ad11357b
 
 ## Why this instead of [R package]?
 
-If you already know R, the closest equivalents to this tool's pieces are **`tableone`** (Table 1), **`survival`** (Cox PH), and **`forestplot`** (the figure above). This tool does **not** replace their statistics — the Cox model here is a regular multivariable fit, the log-rank test is standard, and the Table 1 summary is the same tableone-style output (in fact, `tableone` is a direct Python dependency of this project, used for Table 1 generation — see the dev-setup line above).
+If you already know R, the closest equivalents to this tool's pieces are **`tableone`** (Table 1), **`survival`** (Cox PH), and **`forestplot`** (the figure above). This tool does **not** replace their statistics - the Cox model here is a regular multivariable fit, the log-rank test is standard, and the Table 1 summary is the same tableone-style output (in fact, `tableone` is a direct Python dependency of this project, used for Table 1 generation - see the dev-setup line above).
 
 What this tool adds is *provenance enforcement* around those stats, not better stats:
 
-- **Outcome masking before protocol lock** — you must classify variables and declare/lock a study plan while outcome values are still hidden, so hypotheses can't be chosen by peeking at results.
-- **Diagnostic gates that block execution** — post-unmask analyses run through checks (separation, multicollinearity, proportional-hazards) that can fail a run rather than silently emit unstable estimates, as the EPV warning in the sample output above shows.
-- **A cryptographic audit chain** — every step (ingest hash, locked plan hash, execution fingerprint, bundle manifest with composite SHA-256) links into a tamper-evident lineage that a reviewer can verify end-to-end.
+- **Outcome masking before protocol lock** - you must classify variables and declare/lock a study plan while outcome values are still hidden, so hypotheses can't be chosen by peeking at results.
+- **Diagnostic gates that block execution** - post-unmask analyses run through checks (separation, multicollinearity, proportional-hazards) that can fail a run rather than silently emit unstable estimates, as the EPV warning in the sample output above shows.
+- **A cryptographic audit chain** - every step (ingest hash, locked plan hash, execution fingerprint, bundle manifest with composite SHA-256) links into a tamper-evident lineage that a reviewer can verify end-to-end.
 
 Run the same `survival`/`tableone`/`forestplot` pipeline in R and you get the numbers; run it here and you get the numbers **plus** proof they weren't post-hoc.
 
@@ -180,8 +180,7 @@ Run the same `survival`/`tableone`/`forestplot` pipeline in R and you get the nu
 
 ## Authors & Acknowledgments
 
-## Authors & Acknowledgments
-
 - **Lead Maintainer**: [Manjunath N K](https://github.com/nkmanjunath)
 - **AI Pair Programming & Collaboration**:
-  - **Google Antigravity (AGY)** — Pair Programming, 4-Gate Diagnostics & UI/UX design.
+  - **Google Antigravity (AGY)** - Pair Programming, 4-Gate Diagnostics & UI/UX design.
+  - **OpenCode** - Statistical engine verification & benchmarking fixtures.
