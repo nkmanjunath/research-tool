@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="290" font-family="Arial, Helvetica, sans-serif" font-size="13">
+  <text x="20" y="24" font-size="16" font-weight="bold" fill="#1F4E78">Forest Plot — Cox PH Model</text>
+  <text x="20" y="40" font-size="11" font-weight="bold" fill="#555">Covariate</text>
+  <text x="740" y="40" font-size="11" font-weight="bold" fill="#555">aHR [95% CI]</text>
+  <text x="930" y="40" font-size="11" font-weight="bold" fill="#555">p-value</text>
+  <line x1="536.9768086581362" y1="40" x2="536.9768086581362" y2="184" stroke="#999" stroke-width="1.5" stroke-dasharray="6,3" />
+  <line x1="320" y1="189" x2="720" y2="189" stroke="#333" stroke-width="1" />
+  <line x1="335.0415791944328" y1="189" x2="335.0415791944328" y2="193" stroke="#333" stroke-width="1" />
+  <text x="335.0415791944328" y="205" font-size="10" fill="#666" text-anchor="middle">0.05</text>
+  <line x1="381.7649917617505" y1="189" x2="381.7649917617505" y2="193" stroke="#333" stroke-width="1" />
+  <text x="381.7649917617505" y="205" font-size="10" fill="#666" text-anchor="middle">0.1</text>
+  <line x1="428.4884043290681" y1="189" x2="428.4884043290681" y2="193" stroke="#333" stroke-width="1" />
+  <text x="428.4884043290681" y="205" font-size="10" fill="#666" text-anchor="middle">0.2</text>
+  <line x1="490.25339609081857" y1="189" x2="490.25339609081857" y2="193" stroke="#333" stroke-width="1" />
+  <text x="490.25339609081857" y="205" font-size="10" fill="#666" text-anchor="middle">0.5</text>
+  <line x1="536.9768086581362" y1="189" x2="536.9768086581362" y2="193" stroke="#333" stroke-width="1" />
+  <text x="536.9768086581362" y="205" font-size="10" fill="#666" text-anchor="middle">1.0</text>
+  <line x1="583.7002212254539" y1="189" x2="583.7002212254539" y2="193" stroke="#333" stroke-width="1" />
+  <text x="583.7002212254539" y="205" font-size="10" fill="#666" text-anchor="middle">2.0</text>
+  <line x1="645.4652129872044" y1="189" x2="645.4652129872044" y2="193" stroke="#333" stroke-width="1" />
+  <text x="645.4652129872044" y="205" font-size="10" fill="#666" text-anchor="middle">5.0</text>
+  <line x1="692.1886255545221" y1="189" x2="692.1886255545221" y2="193" stroke="#333" stroke-width="1" />
+  <text x="692.1886255545221" y="205" font-size="10" fill="#666" text-anchor="middle">10.0</text>
+  <line x1="719.5200698121265" y1="189" x2="719.5200698121265" y2="193" stroke="#333" stroke-width="1" />
+  <text x="719.5200698121265" y="205" font-size="10" fill="#666" text-anchor="middle">15.0</text>
+  <text x="20" y="72" font-size="12" fill="#333">Treatment Group (B vs A)</text>
+  <line x1="467.5438848288742" y1="68" x2="692.6685557423956" y2="68" stroke="#888" stroke-width="2.5" stroke-linecap="round" />
+  <line x1="467.5438848288742" y1="63" x2="467.5438848288742" y2="73" stroke="#888" stroke-width="1.5" />
+  <line x1="692.6685557423956" y1="63" x2="692.6685557423956" y2="73" stroke="#888" stroke-width="1.5" />
+  <rect x="575.1062202856349" y="63" width="10" height="10" fill="#888" />
+  <text x="740" y="72" font-size="11" fill="#333">1.896 [0.357, 10.071]</text>
+  <text x="930" y="72" font-size="11" fill="#333">p = 0.453</text>
+  <text x="20" y="108" font-size="12" fill="#333">Age, years (Per year increase)</text>
+  <line x1="532.8885449479302" y1="104" x2="542.224215678446" y2="104" stroke="#888" stroke-width="2.5" stroke-linecap="round" />
+  <line x1="532.8885449479302" y1="99" x2="532.8885449479302" y2="109" stroke="#888" stroke-width="1.5" />
+  <line x1="542.224215678446" y1="99" x2="542.224215678446" y2="109" stroke="#888" stroke-width="1.5" />
+  <rect x="532.556380313188" y="99" width="10" height="10" fill="#888" />
+  <text x="740" y="108" font-size="11" fill="#333">1.009 [0.941, 1.081]</text>
+  <text x="930" y="108" font-size="11" fill="#333">p = 0.808</text>
+  <text x="20" y="144" font-size="12" fill="#333">High-Risk Cytogenetics (Yes vs No)</text>
+  <line x1="355.1715934024757" y1="140" x2="588.1283922703303" y2="140" stroke="#888" stroke-width="2.5" stroke-linecap="round" />
+  <line x1="355.1715934024757" y1="135" x2="355.1715934024757" y2="145" stroke="#888" stroke-width="1.5" />
+  <line x1="588.1283922703303" y1="135" x2="588.1283922703303" y2="145" stroke="#888" stroke-width="1.5" />
+  <rect x="466.649992836403" y="135" width="10" height="10" fill="#888" />
+  <text x="740" y="144" font-size="11" fill="#333">0.379 [0.067, 2.136]</text>
+  <text x="930" y="144" font-size="11" fill="#333">p = 0.272</text>
+  <text x="20" y="180" font-size="12" fill="#333">Prior Lines of Therapy (Per additional line)</text>
+  <line x1="523.0192001923808" y1="176" x2="593.9613074621537" y2="176" stroke="#888" stroke-width="2.5" stroke-linecap="round" />
+  <line x1="523.0192001923808" y1="171" x2="523.0192001923808" y2="181" stroke="#888" stroke-width="1.5" />
+  <line x1="593.9613074621537" y1="171" x2="593.9613074621537" y2="181" stroke="#888" stroke-width="1.5" />
+  <rect x="553.4902538272672" y="171" width="10" height="10" fill="#888" />
+  <text x="740" y="180" font-size="11" fill="#333">1.376 [0.813, 2.329]</text>
+  <text x="930" y="180" font-size="11" fill="#333">p = 0.235</text>
+  <text x="20" y="224" font-size="11" fill="#555">C-index=0.701 | LR test p=0.6526 | N=21 | Events=10</text>
+  <text x="20" y="242" font-size="10" fill="#555" font-style="italic">aHR = adjusted Hazard Ratio (multivariable Cox model)</text>
+  <text x="20" y="254" font-size="11" fill="#C0392B" font-weight="bold">⚠ Caution: EPV=2.5, below recommended threshold — estimates may be unstable.</text>
+</svg>
