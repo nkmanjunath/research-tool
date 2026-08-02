@@ -185,4 +185,3 @@ Run the same `survival`/`tableone`/`forestplot` pipeline in R and you get the nu
 - **Lead Maintainer**: [Manjunath N K](https://github.com/nkmanjunath)
 - **AI Pair Programming & Collaboration**:
   - **Google Antigravity (AGY)** — Pair Programming, 4-Gate Diagnostics & UI/UX design.
-  - **OpenCode** — Statistical engine verification & benchmarking fixtures.
