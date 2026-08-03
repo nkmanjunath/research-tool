@@ -673,7 +673,36 @@ Audit of full codebase identified 5 dead-code items for removal and 2 items conf
 - **Rigor Justification**: Allowing studies with $\text{EPV} < 5.0$ to pass through to Tab 4 publication asset generation created an unacceptable risk of generating "publication-ready" tables for statistically invalid models. In clinical literature (Peduzzi et al., 1996; Vittinghoff & McCulloch, 2007), $\text{EPV} < 5.0$ results in severe bias, invalid confidence intervals, and high rates of type I/II error.
 - **Governance**: Upgrading $\text{EPV} < 5.0$ to a hard gate ensures that pre-registered protocol amendments are cryptographically logged in the DAG (`H1 -> H2...Hn`), preventing undocumented model over-fitting and preserving the integrity of the audit binder.
 
+---
 
+## 19. Future Architecture: Pluggable Statistics Backend (Not Yet Built)
 
+**Date:** 2026-08-03
+**Status:** Design note only. Not started, not scheduled.
 
+### Motivation
+Multiple external reviewers (Reddit feedback, Aug 2026) independently raised the same question: why is this tool Python-only when R's ecosystem (`survival`, `tableone`, `forestplot`) is the de facto standard for this exact class of analysis in biostatistics? The honest answer is implementation convenience, not architectural necessity — the governance layer (outcome masking, protocol locking, diagnostic gates, cryptographic audit trail) is process enforcement, not statistics, and doesn't inherently require any particular stats engine.
 
+### Proposed Shape
+
+```
+        Governance Layer
+   (protocol lock, audit trail,
+    outcome masking, diagnostics)
+               │
+     ┌─────────┴─────────┐
+     │                   │
+  Python backend      R backend
+(lifelines, etc.)  (survival, etc.)
+```
+
+The governance layer would define a backend-agnostic contract: given a locked protocol and unmasked data, a backend returns a standard result shape (coefficients, CIs, p-values, diagnostic test statistics) that the reporting layer already consumes regardless of which engine produced it.
+
+### Why This Is Harder Than It Looks — Not a Quick Add
+1. **Diagnostic gate parity is the real risk.** Complete-separation detection, VIF thresholds, Schoenfeld residual tests, and EPV calculations must mean the *same thing* whether computed via statsmodels/lifelines or R's `survival`/`car` packages. If the R backend's gates are weaker or differently calibrated, the tool's core rigor claim — that a PASS means the same thing regardless of backend — breaks silently. This is the load-bearing risk, not the modeling code itself.
+2. **Interop mechanism.** Options: `rpy2` in-process bridge, or an R subprocess with a defined JSON contract (safer isolation, easier to reason about failure modes, likely preferred over rpy2's tighter coupling).
+3. **Test surface roughly doubles.** Every existing statistical correctness test (Cox PH fitting, gate threshold behavior, EPV edge cases) needs an equivalent R-backend test asserting equivalent — not just superficially similar — output.
+4. **Labeling/reporting layer** (`get_display_label`, forest plot rendering, Table 1 generation) is currently Python-native (`tableone`) and would need either a shared abstraction or a parallel R-side reporting path.
+
+### Status
+Not started. Logged here so the idea isn't lost, not because it's scheduled. Revisit if: (a) R-native user demand becomes a recurring blocker rather than a one-off comment, or (b) there's a dedicated block of time to treat this as its own project phase rather than an add-on to existing work.
